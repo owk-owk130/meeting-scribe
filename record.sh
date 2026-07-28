@@ -2,8 +2,7 @@
 # record.sh — 会議録音のコントローラ
 # 使い方: record.sh toggle | start | stop | status
 #   status は stdout に "recording" / "transcribing" / "idle" を出力する
-# 録音は MeetingScribeRecorder（Core Audio タップ）が行う:
-#   L=デフォルト入力（自分の声） / R=システム音声（会議相手の声）
+# 実際の録音は MeetingScribeRecorder が行う
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

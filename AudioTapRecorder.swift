@@ -1,6 +1,6 @@
 // AudioTapRecorder — マイクとシステム音声を1つのステレオ m4a に録音する CLI
 //   L チャンネル: デフォルト入力デバイス（自分の声）
-//   R チャンネル: システム音声のプロセスタップ（会議相手の声。出力デバイスに関係なく取れる）
+//   R チャンネル: システム音声のプロセスタップ（会議相手の声）
 // 使い方: MeetingScribeRecorder <output.m4a>   SIGINT/SIGTERM で停止・ファイナライズ
 // ビルド: ./build.sh（macOS 14.4+ の Core Audio process tap API を使用）
 import AVFoundation
@@ -81,14 +81,13 @@ let micDevice = defaultInputDevice()
 let micChannels = max(1, inputChannelCount(micDevice))
 FileHandle.standardError.write("input device: \(deviceName(micDevice)) (\(micChannels)ch)\n".data(using: .utf8)!)
 
-// システム音声のグローバルタップ（除外プロセスなし = 全アプリの出力音声）
 let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
 tapDescription.name = "MeetingScribeTap"
 tapDescription.isPrivate = true
 var tapID = AudioObjectID(kAudioObjectUnknown)
 check(AudioHardwareCreateProcessTap(tapDescription, &tapID), "create process tap")
 
-// マイクとタップを1つの集約デバイスにまとめる（ドリフト補正はCore Audio任せ）
+// マイクとタップを1つの集約デバイスにまとめる
 let aggregateDescription: [String: Any] = [
     kAudioAggregateDeviceNameKey: "MeetingScribe Recorder",
     kAudioAggregateDeviceUIDKey: UUID().uuidString,
@@ -133,8 +132,7 @@ do {
 // MARK: - タップのキープアライブ
 
 // システム音声が完全に無音だとタップが止まり、集約デバイスの IO コールバックごと
-// 止まってしまう（実機確認済み）。無音を常時再生してタップを流しっぱなしにする。
-// ゼロを混ぜるだけなので録音内容には影響しない。
+// 止まってしまう。無音を常時再生してタップを流しっぱなしにする
 let silenceEngine = AVAudioEngine()
 let silenceSource = AVAudioSourceNode { _, _, _, audioBufferList -> OSStatus in
     for buffer in UnsafeMutableAudioBufferListPointer(audioBufferList) {
@@ -162,8 +160,7 @@ startSilenceEngine()
 
 // 集約デバイスの入力バッファは「サブデバイス（マイク）→ タップ」の順にチャンネルが並ぶ。
 // 先頭 micChannels ch を L（自分）、残りを R（相手）に平均して書き込む。
-// 既知の制限: 録音中に入力デバイスが消える（AirPods の電池切れ等）とチャンネル構成が
-// 変わり L/R の割り当てが崩れる可能性がある。その場合は録音を止めて再開すること。
+// 録音中に入力デバイスが消えるとチャンネル構成が変わり L/R の割り当てが崩れる
 let ioQueue = DispatchQueue(label: "recorder.io")
 var ioProcID: AudioDeviceIOProcID?
 var writeFailed = false
@@ -206,8 +203,7 @@ check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, i
     do {
         try audioFile.write(from: pcm)
     } catch {
-        // ディスクフル等で書けなくなったら「録音中」のまま無音を垂れ流さず、
-        // ログを残してシグナルハンドラのファイナライズ経路で終了する
+        // 書けなくなったら「録音中」のまま続けず、シグナル経由でファイナライズして終わる
         if !writeFailed {
             writeFailed = true
             FileHandle.standardError.write("error: write failed: \(error)\n".data(using: .utf8)!)

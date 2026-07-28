@@ -5,8 +5,7 @@ import Foundation
 
 // MARK: - 設定
 
-// .app は build.sh がプロジェクトディレクトリ内に生成するので、バンドルの親 = スクリプト群の場所。
-// .app を単体で別の場所に移動すると record.sh が見つからず起動時アラートが出る
+// .app は build.sh がプロジェクトディレクトリ内に生成するので、バンドルの親 = スクリプト群の場所
 let scriptDir = URL(fileURLWithPath: Bundle.main.bundlePath).deletingLastPathComponent().path
 let recordScript = "\(scriptDir)/record.sh"
 let startedFile = "\(scriptDir)/.recording.started"
@@ -51,8 +50,7 @@ func runRecordScript(_ command: String) -> ShellResult {
     runShell("/bin/bash", [recordScript, command])
 }
 
-// パス設定は config.sh を単一の真実源とする（shell スクリプト群と共有）
-// 読めない場合はフォールバックせず configLoaded=false を返し、起動時にアラートで明示する
+// config.sh が読めないときはフォールバックせず、起動時にアラートで明示する
 func loadConfig() -> (recordingsDir: String, vaultMeetingsDir: String, configLoaded: Bool) {
     let result = runShell("/bin/bash", [
         "-c", "source \"\(scriptDir)/config.sh\" && printf '%s\\n%s' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\"",
@@ -80,7 +78,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pollTimer: Timer?
     private var scriptAvailable = true
 
-    // メニュー項目（状態で表示を切り替えるため保持）
     private let transcribingItem = NSMenuItem(title: "文字起こし中…", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "録音開始", action: #selector(toggleRecording), keyEquivalent: "r")
 
@@ -89,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // autosaveName がないとメニューバー内の位置が保存されず、項目が多いと
-        // 最左（ノッチの裏）へ追いやられて見えなくなる。⌘ドラッグでの並べ替えもこれで永続化される
+        // 最左（ノッチの裏）へ追いやられて見えなくなる
         statusItem.autosaveName = "MeetingScribe"
         statusItem.button?.title = idleIcon
 
@@ -151,8 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ opening: NSMenu) {
         guard opening === menu else { return }
         transcribingItem.isHidden = !(scriptAvailable && !isRecording && isTranscribing)
-        // iCloud フォルダの列挙は遅いことがあるので、メインメニューを開いた時点で
-        // バックグラウンドに投げ、サブメニューが開かれるまでに差し替えておく
+        // iCloud フォルダの列挙は遅いので、メインメニューを開いた時点で投げておく
         rebuildRecentNotesAsync()
     }
 

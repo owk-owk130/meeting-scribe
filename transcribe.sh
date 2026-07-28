@@ -1,8 +1,6 @@
 #!/bin/bash
 # transcribe.sh — 録音ファイルを文字起こしして Obsidian Vault にノートを作る
 # 使い方: transcribe.sh <audio-file>
-# ステレオ録音（L=自分 / R=相手）は L/R を別々に文字起こしして話者ラベルを付ける。
-# モノラル、または R が無音ならラベルなしのプレーン出力。
 # 実行中は .transcribing.pid を置き、record.sh status が "transcribing" を返せるようにする
 set -u
 
@@ -93,8 +91,7 @@ print(data["summary"].strip())
 PY
 }
 
-# VAD（音声区間検出）を必ず通す。無音・環境ノイズだけの区間を whisper にかけると
-# 「ご視聴ありがとうございました」等の幻聴を出すため、発話区間だけを対象にする
+# VAD（音声区間検出）を必ず通す。無音・環境ノイズだけの区間は whisper が幻聴を出すため
 run_whisper() {  # $1: 16kHz mono wav, $2: 出力ベースパス（.json / .txt が付く）, $3: 出力形式フラグ
   "$WHISPER_BIN" -m "$MODEL" -l "$WHISPER_LANG" -f "$1" "$3" -of "$2" -np \
     --vad --vad-model "$VAD_MODEL" 2>>"$LOG_FILE"
