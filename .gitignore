@@ -2,8 +2,7 @@
 config.sh
 
 # whisper モデル（README の手順でダウンロード）
-models/*
-!models/.gitkeep
+models/
 
 # ビルド成果物
 MeetingScribe.app/

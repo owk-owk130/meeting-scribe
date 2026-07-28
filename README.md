@@ -33,6 +33,7 @@ cd meeting-scribe
 brew install ffmpeg whisper-cpp
 
 # whisper モデル（約1.5GB）
+mkdir -p models
 curl -L -o models/ggml-large-v3-turbo.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
 
