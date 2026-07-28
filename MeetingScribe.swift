@@ -88,6 +88,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // autosaveName がないとメニューバー内の位置が保存されず、項目が多いと
+        // 最左（ノッチの裏）へ追いやられて見えなくなる。⌘ドラッグでの並べ替えもこれで永続化される
+        statusItem.autosaveName = "MeetingScribe"
         statusItem.button?.title = idleIcon
 
         scriptAvailable = configLoaded && FileManager.default.isExecutableFile(atPath: recordScript)

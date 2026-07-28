@@ -84,6 +84,25 @@ open MeetingScribe.app
 保存先パスは `config.sh` に集約されている。シェルスクリプトとアプリの両方がここを読むため、
 編集は 1 箇所で済む。変更後は再ビルド不要で、アプリの再起動だけでよい。
 
+## アイコンがメニューバーに出ないとき
+
+メニューバーの項目が多い（特にノッチ付きの MacBook）と、位置を持たない項目は
+最左＝ノッチの裏に追いやられて見えなくなる。表示されている状態なら **⌘ を押しながらドラッグ**
+すれば並べ替えでき、その位置は保存される。
+
+隠れていてドラッグできない場合は、位置を直接指定してから起動する。
+値は**画面右端からの距離**で、小さいほど右（＝優先度が高い）:
+
+```sh
+pkill -x MeetingScribe
+defaults write local.meetingscribe "NSStatusItem Preferred Position MeetingScribe" -float 400
+killall cfprefsd
+open MeetingScribe.app
+```
+
+他の項目の値は `defaults read <ドメイン> | grep 'Preferred Position'` で確認できる
+（参考: コントロールセンター 143 / Wi-Fi 177 / バッテリー 215）。
+
 ## ログイン時に自動起動したい場合
 
 「システム設定 > 一般 > ログイン項目」に `MeetingScribe.app` を手動で追加する。
