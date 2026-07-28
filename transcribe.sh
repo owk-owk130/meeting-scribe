@@ -51,8 +51,6 @@ run_whisper() {  # $1: 16kHz mono wav, $2: 出力ベースパス（.json / .txt 
     --vad --vad-model "$VAD_MODEL" 2>>"$LOG_FILE"
 }
 
-notify "文字起こしを開始しました"
-
 CHANNELS="$(ffprobe -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 "$AUDIO")"
 
 if [[ "$CHANNELS" == "2" ]]; then

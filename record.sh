@@ -16,6 +16,10 @@ STARTED_FILE="$SCRIPT_DIR/.recording.started"
 TRANSCRIBING_PID_FILE="$SCRIPT_DIR/.transcribing.pid"
 LOG_FILE="$SCRIPT_DIR/record.log"
 
+notify() {
+  osascript -e "display notification \"$1\" with title \"MeetingScribe\"" 2>/dev/null || true
+}
+
 # PID 生存確認だけでなくプロセス名も検証する
 # （クラッシュ後の stale PID が別プロセスに再利用されていた場合の誤 kill を防ぐ）
 is_recording() {
@@ -65,6 +69,7 @@ cmd_start() {
   echo "$pid" > "$PID_FILE"
   echo "$outfile" > "$FILE_FILE"
   date +%s > "$STARTED_FILE"
+  notify "録音を開始しました"
   echo "started: $outfile"
 }
 
@@ -91,6 +96,7 @@ cmd_stop() {
     nohup "$SCRIPT_DIR/transcribe.sh" "$outfile" >>"$LOG_FILE" 2>&1 &
     # transcribe.sh 自身が pid を書くまでの間も status が "transcribing" を返せるよう親側でも書く
     echo $! > "$TRANSCRIBING_PID_FILE"
+    notify "録音を停止しました。文字起こし中…"
     echo "stopped: $outfile (transcribing in background)"
   else
     echo "stopped (no output file)" >&2
