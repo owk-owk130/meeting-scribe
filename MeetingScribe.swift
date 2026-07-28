@@ -272,8 +272,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // Obsidian は .md のファイルハンドラを登録しないので、ファイル URL で開くと
-    // .md の既定アプリ（Warp 等のエディタ）に渡ってしまう。URL スキームで Obsidian に開かせる
+    // Obsidian は .md のファイルハンドラを登録しないため、ファイル URL で開くと
+    // .md の既定アプリ（エディタ等）に渡ってしまう。URL スキームで Obsidian に開かせる
     @objc private func openNote(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
         var components = URLComponents()

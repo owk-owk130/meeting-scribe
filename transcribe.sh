@@ -1,8 +1,8 @@
 #!/bin/bash
-# transcribe.sh — 録音ファイルを whisper-cpp で文字起こしして Obsidian Vault にノートを作る
+# transcribe.sh — 録音ファイルを文字起こしして Obsidian Vault にノートを作る
 # 使い方: transcribe.sh <audio-file>
-# ステレオ録音（L=自分 / R=相手）なら L/R を別々に文字起こしして話者ラベル付きノートにする。
-# モノラル、または R が無音（対面会議・システム音声なし）なら従来どおりのプレーンな文字起こし。
+# ステレオ録音（L=自分 / R=相手）は L/R を別々に文字起こしして話者ラベルを付ける。
+# モノラル、または R が無音ならラベルなしのプレーン出力。
 # 実行中は .transcribing.pid を置き、record.sh status が "transcribing" を返せるようにする
 set -u
 
@@ -44,14 +44,12 @@ STAMP="$(date +%Y-%m-%d-%H%M%S)"   # 秒まで含めて同名ノートの上書�
 BODY="$TMP_DIR/body.md"
 
 # 文字起こし本文から タイトル / タグ / 要約 を codex に作らせる。
-# 標準出力の 1 行目=タイトル、2 行目=タグ(カンマ区切り)、3 行目以降=要約。
-# 失敗したら非ゼロを返し、呼び出し側が従来どおりのノートにフォールバックする
+# 出力は 1 行目=タイトル、2 行目=タグ(カンマ区切り)、3 行目以降=要約。失敗時は非ゼロ
 generate_meta() {
-  [[ -n "${CODEX_BIN:-}" && -x "$CODEX_BIN" ]] || return 1
+  [[ -x "${CODEX_BIN:-}" ]] || return 1
 
   local schema="$TMP_DIR/note-schema.json" result="$TMP_DIR/note-meta.json"
-  # codex は受け取った stdin をログにエコーするので、成功時は record.log に残さない
-  # （毎回文字起こし全文が追記されてログが肥大する）。失敗時だけ原因調査用に転記する
+  # codex は stdin をログにエコーするため、成功時は record.log に残さない（肥大するので）
   local codex_log="$TMP_DIR/codex.log"
   cat > "$schema" <<'JSON'
 {
@@ -66,7 +64,7 @@ generate_meta() {
 }
 JSON
 
-  # Vault は git リポジトリではないので --skip-git-repo-check が必須（無いと即エラー終了する）
+  # Vault は git リポジトリではないので --skip-git-repo-check は必須
   "$CODEX_BIN" exec -s read-only --skip-git-repo-check \
     --output-schema "$schema" -o "$result" \
     '以下は会議の文字起こしです。JSON で title / tags / summary を返してください。
@@ -82,21 +80,16 @@ import json
 import re
 import sys
 
+# 3 フィールドは schema で必須にしてあるので、欠けていれば例外で落ちてフォールバックに回る
 with open(sys.argv[1], encoding="utf-8") as f:
     data = json.load(f)
 
-# タイトルはファイル名に使うので、パス区切りと Windows/macOS の禁止文字を落とす
-title = re.sub(r'[/:*?"<>|\\]', "", str(data.get("title", ""))).strip()
-# タグは frontmatter の [a, b] 形式に入れるため、区切りと衝突する文字を落とす
-tags = []
-for tag in data.get("tags") or []:
-    tag = re.sub(r"[,\[\]]", "", str(tag)).strip()
-    if tag:
-        tags.append(tag)
-
-print(title)
-print(",".join(tags))
-print(str(data.get("summary", "")).strip())
+# タイトルはファイル名に使うのでパス区切りなどを落とす
+print(re.sub(r'[/:*?"<>|\\]', "", data["title"]).strip())
+# タグは frontmatter の [a, b] 形式に入れるので区切りと衝突する文字を落とす
+tags = (re.sub(r"[,\[\]]", "", tag).strip() for tag in data["tags"])
+print(",".join(tag for tag in tags if tag))
+print(data["summary"].strip())
 PY
 }
 
@@ -116,9 +109,7 @@ if [[ "$CHANNELS" == "2" ]]; then
     -map "[l]" -ac 1 -ar 16000 "$TMP_DIR/self.wav" \
     -map "[r]" -ac 1 -ar 16000 "$TMP_DIR/others.wav" \
     2>>"$LOG_FILE" || fail "チャンネル分離に失敗しました"
-fi
 
-if [[ "$CHANNELS" == "2" ]]; then
   # 各チャンネルを個別に文字起こしし、タイムスタンプでマージする。
   # 相手チャンネルに発話がなければ（対面会議など）ラベルなしのプレーン出力にする
   run_whisper "$TMP_DIR/self.wav" "$TMP_DIR/self" -oj || fail "whisper の実行に失敗しました（自分）"
