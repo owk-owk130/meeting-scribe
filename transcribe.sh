@@ -41,8 +41,64 @@ trap '[[ "$(cat "$TRANSCRIBING_PID_FILE" 2>/dev/null)" == "$$" ]] && rm -f "$TRA
 
 BASENAME="$(basename "$AUDIO")"
 STAMP="$(date +%Y-%m-%d-%H%M%S)"   # 秒まで含めて同名ノートの上書きを防ぐ
-NOTE="$VAULT_MEETINGS_DIR/$STAMP 会議メモ.md"
 BODY="$TMP_DIR/body.md"
+
+# 文字起こし本文から タイトル / タグ / 要約 を codex に作らせる。
+# 標準出力の 1 行目=タイトル、2 行目=タグ(カンマ区切り)、3 行目以降=要約。
+# 失敗したら非ゼロを返し、呼び出し側が従来どおりのノートにフォールバックする
+generate_meta() {
+  [[ -n "${CODEX_BIN:-}" && -x "$CODEX_BIN" ]] || return 1
+
+  local schema="$TMP_DIR/note-schema.json" result="$TMP_DIR/note-meta.json"
+  # codex は受け取った stdin をログにエコーするので、成功時は record.log に残さない
+  # （毎回文字起こし全文が追記されてログが肥大する）。失敗時だけ原因調査用に転記する
+  local codex_log="$TMP_DIR/codex.log"
+  cat > "$schema" <<'JSON'
+{
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "会議内容が分かる簡潔な日本語タイトル。30文字以内" },
+    "tags": { "type": "array", "items": { "type": "string" }, "description": "内容を表すタグ 2〜4 個" },
+    "summary": { "type": "string", "description": "要約。決定事項とアクションアイテムを箇条書きで" }
+  },
+  "required": ["title", "tags", "summary"],
+  "additionalProperties": false
+}
+JSON
+
+  # Vault は git リポジトリではないので --skip-git-repo-check が必須（無いと即エラー終了する）
+  "$CODEX_BIN" exec -s read-only --skip-git-repo-check \
+    --output-schema "$schema" -o "$result" \
+    '以下は会議の文字起こしです。JSON で title / tags / summary を返してください。
+
+- title: 内容が分かる簡潔な日本語タイトル（30文字以内）
+- tags: 内容を表すタグ 2〜4 個。日本語・英語どちらでも可
+- summary: 決定事項とアクションアイテムを箇条書きで。無い場合は話題の要点を箇条書きで' \
+    < "$BODY" >"$codex_log" 2>&1 || { cat "$codex_log" >>"$LOG_FILE"; return 1; }
+
+  [[ -s "$result" ]] || return 1
+  /usr/bin/python3 - "$result" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+
+# タイトルはファイル名に使うので、パス区切りと Windows/macOS の禁止文字を落とす
+title = re.sub(r'[/:*?"<>|\\]', "", str(data.get("title", ""))).strip()
+# タグは frontmatter の [a, b] 形式に入れるため、区切りと衝突する文字を落とす
+tags = []
+for tag in data.get("tags") or []:
+    tag = re.sub(r"[,\[\]]", "", str(tag)).strip()
+    if tag:
+        tags.append(tag)
+
+print(title)
+print(",".join(tags))
+print(str(data.get("summary", "")).strip())
+PY
+}
 
 # VAD（音声区間検出）を必ず通す。無音・環境ノイズだけの区間を whisper にかけると
 # 「ご視聴ありがとうございました」等の幻聴を出すため、発話区間だけを対象にする
@@ -107,15 +163,37 @@ fi
 
 [[ -s "$BODY" ]] || fail "発話が検出されませんでした（無音の録音の可能性）"
 
+TITLE="会議メモ $STAMP"
+TAGS="meeting"
+SUMMARY=""
+if META="$(generate_meta)"; then
+  META_TITLE="$(sed -n '1p' <<<"$META")"
+  META_TAGS="$(sed -n '2p' <<<"$META")"
+  SUMMARY="$(sed -n '3,$p' <<<"$META")"
+  [[ -n "$META_TITLE" ]] && TITLE="$META_TITLE"
+  [[ -n "$META_TAGS" ]] && TAGS="meeting,$META_TAGS"
+else
+  echo "warn: 要約の生成に失敗しました。文字起こしのみのノートを作ります" >&2
+fi
+
+NOTE="$VAULT_MEETINGS_DIR/$STAMP $TITLE.md"
+
 {
   echo "---"
   echo "date: $(date +%Y-%m-%dT%H:%M:%S)"
   echo "recording: $BASENAME"
-  echo "tags: [meeting]"
+  echo "title: $TITLE"
+  echo "tags: [$TAGS]"
   echo "---"
   echo
-  echo "# 会議メモ $STAMP"
+  echo "# $TITLE"
   echo
+  if [[ -n "$SUMMARY" ]]; then
+    echo "## 要約"
+    echo
+    echo "$SUMMARY"
+    echo
+  fi
   echo "## 文字起こし"
   echo
   cat "$BODY"

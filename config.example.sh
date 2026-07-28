@@ -11,6 +11,10 @@ RECORDINGS_DIR="$HOME/MeetingRecordings"
 VAULT_DIR="$HOME/path/to/your/vault"
 VAULT_MEETINGS_DIR="$VAULT_DIR/Meetings"
 
+# 要約・タイトル・タグの生成に使う codex CLI。アプリから起動されると PATH が
+# 最小になるため絶対パスで指定する。空にすると要約なしのノートになる
+CODEX_BIN="$HOME/.local/share/mise/shims/codex"
+
 # 録音デバイスの指定は不要:
 #   マイク = システムのデフォルト入力（AirPods 接続中は AirPods マイク）
 #   相手の声 = Core Audio プロセスタップ（出力デバイスに関係なくシステム音声を取得）
