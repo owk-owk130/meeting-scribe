@@ -36,6 +36,10 @@ brew install ffmpeg whisper-cpp
 curl -L -o models/ggml-large-v3-turbo.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
 
+# VAD モデル（約900KB）。無音区間での幻聴を防ぐために必須
+curl -L -o models/ggml-silero-v5.1.2.bin \
+  https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
+
 # 設定（ノートの出力先などを編集する）
 cp config.example.sh config.sh
 $EDITOR config.sh

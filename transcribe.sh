@@ -11,10 +11,10 @@ source "$SCRIPT_DIR/config.sh"
 
 WHISPER_BIN="/opt/homebrew/bin/whisper-cli"
 MODEL="$SCRIPT_DIR/models/ggml-large-v3-turbo.bin"
+VAD_MODEL="$SCRIPT_DIR/models/ggml-silero-v5.1.2.bin"
 WHISPER_LANG="ja"
 TRANSCRIBING_PID_FILE="$SCRIPT_DIR/.transcribing.pid"
 LOG_FILE="$SCRIPT_DIR/record.log"
-SILENCE_THRESHOLD_DB=-50
 
 notify() {
   osascript -e "display notification \"$1\" with title \"MeetingScribe\"" 2>/dev/null || true
@@ -30,6 +30,7 @@ AUDIO="${1:-}"
 [[ -f "$AUDIO" ]] || fail "音声ファイルが見つかりません: $AUDIO"
 [[ -x "$WHISPER_BIN" ]] || fail "whisper-cli がありません (brew install whisper-cpp)"
 [[ -f "$MODEL" ]] || fail "モデルがありません: $MODEL"
+[[ -f "$VAD_MODEL" ]] || fail "VAD モデルがありません: $VAD_MODEL"
 
 mkdir -p "$VAULT_MEETINGS_DIR"
 
@@ -43,15 +44,11 @@ STAMP="$(date +%Y-%m-%d-%H%M%S)"   # 秒まで含めて同名ノートの上書�
 NOTE="$VAULT_MEETINGS_DIR/$STAMP 会議メモ.md"
 BODY="$TMP_DIR/body.md"
 
+# VAD（音声区間検出）を必ず通す。無音・環境ノイズだけの区間を whisper にかけると
+# 「ご視聴ありがとうございました」等の幻聴を出すため、発話区間だけを対象にする
 run_whisper() {  # $1: 16kHz mono wav, $2: 出力ベースパス（.json / .txt が付く）, $3: 出力形式フラグ
-  "$WHISPER_BIN" -m "$MODEL" -l "$WHISPER_LANG" -f "$1" "$3" -of "$2" -np 2>>"$LOG_FILE"
-}
-
-is_silent() {  # $1: wav — 平均音量が閾値未満なら無音扱い（無音を whisper にかけると幻聴を出す）
-  local mean
-  mean="$(ffmpeg -nostdin -i "$1" -af volumedetect -f null - 2>&1 | sed -n 's/.*mean_volume: \([-0-9.]*\) dB.*/\1/p')"
-  [[ -z "$mean" ]] && return 0
-  awk -v m="$mean" -v t="$SILENCE_THRESHOLD_DB" 'BEGIN { exit !(m < t) }'
+  "$WHISPER_BIN" -m "$MODEL" -l "$WHISPER_LANG" -f "$1" "$3" -of "$2" -np \
+    --vad --vad-model "$VAD_MODEL" 2>>"$LOG_FILE"
 }
 
 notify "文字起こしを開始しました"
@@ -67,11 +64,10 @@ if [[ "$CHANNELS" == "2" ]]; then
     2>>"$LOG_FILE" || fail "チャンネル分離に失敗しました"
 fi
 
-if [[ "$CHANNELS" == "2" ]] && ! is_silent "$TMP_DIR/others.wav"; then
-  # 話者ラベル付き: 各チャンネルを個別に文字起こしし、タイムスタンプでマージ
-  if ! is_silent "$TMP_DIR/self.wav"; then
-    run_whisper "$TMP_DIR/self.wav" "$TMP_DIR/self" -oj || fail "whisper の実行に失敗しました（自分）"
-  fi
+if [[ "$CHANNELS" == "2" ]]; then
+  # 各チャンネルを個別に文字起こしし、タイムスタンプでマージする。
+  # 相手チャンネルに発話がなければ（対面会議など）ラベルなしのプレーン出力にする
+  run_whisper "$TMP_DIR/self.wav" "$TMP_DIR/self" -oj || fail "whisper の実行に失敗しました（自分）"
   run_whisper "$TMP_DIR/others.wav" "$TMP_DIR/others" -oj || fail "whisper の実行に失敗しました（相手）"
 
   /usr/bin/python3 - "$TMP_DIR/self.json" "$TMP_DIR/others.json" > "$BODY" <<'PY' || fail "文字起こし結果のマージに失敗しました"
@@ -93,26 +89,25 @@ def load(path, label):
     return segments
 
 
-merged = sorted(load(sys.argv[1], "自分") + load(sys.argv[2], "相手"))
-for offset_ms, label, text in merged:
-    minutes, seconds = divmod(offset_ms // 1000, 60)
-    print(f"- [{minutes:02d}:{seconds:02d}] **{label}**: {text}")
+mine = load(sys.argv[1], "自分")
+others = load(sys.argv[2], "相手")
+if others:
+    for offset_ms, label, text in sorted(mine + others):
+        minutes, seconds = divmod(offset_ms // 1000, 60)
+        print(f"- [{minutes:02d}:{seconds:02d}] **{label}**: {text}")
+else:
+    for _, _, text in sorted(mine):
+        print(text)
 PY
 else
-  # プレーン: モノラル録音、またはシステム音声なし（対面会議など）
-  if [[ "$CHANNELS" == "2" ]]; then
-    WAV="$TMP_DIR/self.wav"
-  else
-    WAV="$TMP_DIR/audio.wav"
-    ffmpeg -nostdin -hide_banner -y -i "$AUDIO" -ac 1 -ar 16000 "$WAV" 2>>"$LOG_FILE" \
-      || fail "wav 変換に失敗しました"
-  fi
-  is_silent "$WAV" && fail "録音が無音のため文字起こしをスキップしました"
+  WAV="$TMP_DIR/audio.wav"
+  ffmpeg -nostdin -hide_banner -y -i "$AUDIO" -ac 1 -ar 16000 "$WAV" 2>>"$LOG_FILE" \
+    || fail "wav 変換に失敗しました"
   run_whisper "$WAV" "$TMP_DIR/plain" -otxt || fail "whisper の実行に失敗しました"
   cp "$TMP_DIR/plain.txt" "$BODY"
 fi
 
-[[ -s "$BODY" ]] || fail "文字起こし結果が空です"
+[[ -s "$BODY" ]] || fail "発話が検出されませんでした（無音の録音の可能性）"
 
 {
   echo "---"
