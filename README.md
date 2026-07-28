@@ -107,3 +107,10 @@ open MeetingScribe.app
 ## ログイン時に自動起動したい場合
 
 「システム設定 > 一般 > ログイン項目」に `MeetingScribe.app` を手動で追加する。
+
+## ライセンス
+
+MIT License（[LICENSE](LICENSE)）
+
+外部依存はいずれも別プロセスとして呼び出しているだけで、リンクはしていない:
+whisper.cpp（MIT）/ whisper モデル（MIT）/ Silero VAD（MIT）/ ffmpeg（GPL-3.0）
