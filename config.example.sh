@@ -11,3 +11,9 @@ VAULT_MEETINGS_DIR="$VAULT_DIR/Meetings"
 # 要約・タイトル・タグの生成に使う codex CLI。アプリ起動時は PATH が最小なので絶対パスで指定する。
 # 空にすると要約なしのノートになる
 CODEX_BIN="$HOME/.local/share/mise/shims/codex"
+
+# ライブ文字起こし（録音中にフローティングウィンドウへ逐次表示）。0 で無効
+LIVE_TRANSCRIBE=1
+
+# ライブ文字起こしの更新間隔（秒）
+LIVE_INTERVAL_SECS=30

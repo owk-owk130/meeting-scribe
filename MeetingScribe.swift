@@ -9,6 +9,7 @@ import Foundation
 let scriptDir = URL(fileURLWithPath: Bundle.main.bundlePath).deletingLastPathComponent().path
 let recordScript = "\(scriptDir)/record.sh"
 let startedFile = "\(scriptDir)/.recording.started"
+let liveTranscriptFile = "\(scriptDir)/.live-transcript.md"
 
 let idleIcon = "🎙"
 let recordingIcon = "🔴"
@@ -51,18 +52,18 @@ func runRecordScript(_ command: String) -> ShellResult {
 }
 
 // config.sh が読めないときはフォールバックせず、起動時にアラートで明示する
-func loadConfig() -> (recordingsDir: String, vaultMeetingsDir: String, configLoaded: Bool) {
+func loadConfig() -> (recordingsDir: String, vaultMeetingsDir: String, liveTranscribe: Bool, configLoaded: Bool) {
     let result = runShell("/bin/bash", [
-        "-c", "source \"\(scriptDir)/config.sh\" && printf '%s\\n%s' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\"",
+        "-c", "source \"\(scriptDir)/config.sh\" && printf '%s\\n%s\\n%s' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\" \"${LIVE_TRANSCRIBE:-1}\"",
     ])
     let lines = result.stdout.components(separatedBy: "\n")
-    guard result.exitCode == 0, lines.count == 2, !lines[0].isEmpty, !lines[1].isEmpty else {
-        return ("", "", false)
+    guard result.exitCode == 0, lines.count == 3, !lines[0].isEmpty, !lines[1].isEmpty else {
+        return ("", "", true, false)
     }
-    return (lines[0], lines[1], true)
+    return (lines[0], lines[1], lines[2] != "0", true)
 }
 
-let (recordingsDir, vaultMeetingsDir, configLoaded) = loadConfig()
+let (recordingsDir, vaultMeetingsDir, liveTranscribeEnabled, configLoaded) = loadConfig()
 
 // MARK: - AppDelegate
 
@@ -80,6 +81,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private let transcribingItem = NSMenuItem(title: "文字起こし中…", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "録音開始", action: #selector(toggleRecording), keyEquivalent: "r")
+    private let liveItem = NSMenuItem(title: "ライブ文字起こしを表示", action: #selector(toggleLivePanel), keyEquivalent: "l")
+
+    private var livePanel: NSPanel?
+    private var liveTextView: NSTextView?
+    private var liveTimer: Timer?
+    private var liveContent: String?
+
+    // ユーザーが自分で閉じたら、以降の録音開始で自動表示しない（開き直せば元に戻る）
+    private var livePanelUserHidden: Bool {
+        get { UserDefaults.standard.bool(forKey: "LivePanelUserHidden") }
+        set { UserDefaults.standard.set(newValue, forKey: "LivePanelUserHidden") }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -126,6 +139,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         toggleItem.target = self
         toggleItem.isEnabled = scriptAvailable
         menu.addItem(toggleItem)
+
+        liveItem.target = self
+        liveItem.isEnabled = scriptAvailable
+        menu.addItem(liveItem)
         menu.addItem(.separator())
 
         let recentItem = NSMenuItem(title: "最近のノート", action: nil, keyEquivalent: "")
@@ -217,12 +234,111 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             recordingStartDate = readStartedDate() ?? Date()
             toggleItem.title = "録音停止"
             startElapsedTimer()
+            if liveTranscribeEnabled && !livePanelUserHidden { showLivePanel() }
         } else {
             recordingStartDate = nil
             toggleItem.title = "録音開始"
             stopElapsedTimer()
             statusItem.button?.title = idleIcon
+            hideLivePanel()
         }
+    }
+
+    // MARK: ライブ文字起こしウィンドウ
+
+    // フォーカスを奪わず常に手前に浮くパネル。会議アプリの上に重ねて使う
+    private func makeLivePanel() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
+            styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing: .buffered, defer: false
+        )
+        panel.title = "ライブ文字起こし"
+        panel.level = .floating
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.setFrameAutosaveName("MeetingScribeLivePanel")
+
+        let scroll = NSScrollView(frame: panel.contentView!.bounds)
+        scroll.autoresizingMask = [.width, .height]
+        scroll.hasVerticalScroller = true
+
+        let text = NSTextView(frame: scroll.bounds)
+        text.isEditable = false
+        text.font = .systemFont(ofSize: 13)
+        text.textContainerInset = NSSize(width: 8, height: 8)
+        text.autoresizingMask = [.width]
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        text.textContainer?.widthTracksTextView = true
+        scroll.documentView = text
+        panel.contentView?.addSubview(scroll)
+        liveTextView = text
+
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                               object: panel, queue: nil) { [weak self] _ in
+            self?.stopLiveTimer()
+            self?.livePanelUserHidden = true
+        }
+        return panel
+    }
+
+    private func showLivePanel() {
+        if livePanel == nil {
+            livePanel = makeLivePanel()
+            livePanel?.center()
+        }
+        liveContent = nil
+        refreshLiveTranscript()
+        livePanel?.orderFront(nil)
+        startLiveTimer()
+    }
+
+    private func hideLivePanel() {
+        stopLiveTimer()
+        livePanel?.orderOut(nil)
+    }
+
+    @objc private func toggleLivePanel() {
+        if livePanel?.isVisible == true {
+            hideLivePanel()
+            livePanelUserHidden = true
+        } else {
+            showLivePanel()
+            livePanelUserHidden = false
+        }
+    }
+
+    private func startLiveTimer() {
+        stopLiveTimer()
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            self?.refreshLiveTranscript()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        liveTimer = timer
+    }
+
+    private func stopLiveTimer() {
+        liveTimer?.invalidate()
+        liveTimer = nil
+    }
+
+    private func refreshLiveTranscript() {
+        guard let text = liveTextView else { return }
+        let content = (try? String(contentsOfFile: liveTranscriptFile, encoding: .utf8)) ?? ""
+        guard content != liveContent else { return }
+        liveContent = content
+
+        // 末尾を見ているときだけ追従する（発言を遡って読んでいる最中に飛ばされないように）
+        let atBottom: Bool
+        if let scroll = text.enclosingScrollView {
+            atBottom = scroll.contentView.bounds.maxY >= text.frame.height - 30
+        } else {
+            atBottom = true
+        }
+        text.string = content.isEmpty ? "（文字起こし待ち…）" : content
+        if atBottom { text.scrollToEndOfDocument(nil) }
     }
 
     private func readStartedDate() -> Date? {

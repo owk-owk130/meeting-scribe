@@ -15,5 +15,9 @@ record.log
 .recording.file
 .recording.started
 .transcribing.pid
+.live.pcm
+.live.pcm.rate
+.live.pid
+.live-transcript.md
 
 .DS_Store

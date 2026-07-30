@@ -14,6 +14,9 @@ FILE_FILE="$SCRIPT_DIR/.recording.file"
 STARTED_FILE="$SCRIPT_DIR/.recording.started"
 TRANSCRIBING_PID_FILE="$SCRIPT_DIR/.transcribing.pid"
 LOG_FILE="$SCRIPT_DIR/record.log"
+LIVE_PCM="$SCRIPT_DIR/.live.pcm"
+LIVE_TRANSCRIPT="$SCRIPT_DIR/.live-transcript.md"
+LIVE_PID_FILE="$SCRIPT_DIR/.live.pid"
 
 notify() {
   osascript -e "display notification \"$1\" with title \"MeetingScribe\"" 2>/dev/null || true
@@ -33,6 +36,18 @@ is_transcribing() {
 
 clear_recording_state() {
   rm -f "$PID_FILE" "$FILE_FILE" "$STARTED_FILE"
+}
+
+# watcher を止めてライブ用の中間ファイルを消す。recorder がクラッシュした後の
+# 取り残された watcher も、次の start / stop で必ずここを通して片付ける
+stop_live_watcher() {
+  local pid
+  if [[ -f "$LIVE_PID_FILE" ]]; then
+    pid="$(cat "$LIVE_PID_FILE")"
+    [[ "$(ps -p "$pid" -o comm= 2>/dev/null)" == *bash* ]] && kill "$pid" 2>/dev/null
+    rm -f "$LIVE_PID_FILE"
+  fi
+  rm -f "$LIVE_PCM" "$LIVE_PCM.rate"
 }
 
 cmd_status() {
@@ -56,9 +71,16 @@ cmd_start() {
   fi
   mkdir -p "$RECORDINGS_DIR"
 
-  local outfile pid
+  local outfile pid live
+  live="${LIVE_TRANSCRIBE:-1}"
   outfile="$RECORDINGS_DIR/meeting-$(date +%Y%m%d-%H%M%S).m4a"
-  nohup "$RECORDER" "$outfile" >>"$LOG_FILE" 2>&1 &
+  stop_live_watcher
+  if [[ "$live" == "1" ]]; then
+    : > "$LIVE_TRANSCRIPT"
+    nohup "$RECORDER" "$outfile" "$LIVE_PCM" >>"$LOG_FILE" 2>&1 &
+  else
+    nohup "$RECORDER" "$outfile" >>"$LOG_FILE" 2>&1 &
+  fi
   pid=$!
   sleep 1
   if ! kill -0 "$pid" 2>/dev/null; then
@@ -68,6 +90,10 @@ cmd_start() {
   echo "$pid" > "$PID_FILE"
   echo "$outfile" > "$FILE_FILE"
   date +%s > "$STARTED_FILE"
+  if [[ "$live" == "1" ]]; then
+    nohup "$SCRIPT_DIR/transcribe-live.sh" "$LIVE_PCM" "$LIVE_TRANSCRIPT" >>"$LOG_FILE" 2>&1 &
+    echo $! > "$LIVE_PID_FILE"
+  fi
   notify "録音を開始しました"
   echo "started: $outfile"
 }
@@ -75,6 +101,7 @@ cmd_start() {
 cmd_stop() {
   if ! is_recording; then
     clear_recording_state
+    stop_live_watcher
     echo "not recording" >&2
     return 0
   fi
@@ -90,6 +117,8 @@ cmd_stop() {
   done
   kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
   clear_recording_state
+
+  stop_live_watcher
 
   if [[ -n "$outfile" && -f "$outfile" ]]; then
     nohup "$SCRIPT_DIR/transcribe.sh" "$outfile" >>"$LOG_FILE" 2>&1 &

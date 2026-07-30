@@ -1,7 +1,9 @@
 // AudioTapRecorder — マイクとシステム音声を1つのステレオ m4a に録音する CLI
 //   L チャンネル: デフォルト入力デバイス（自分の声）
 //   R チャンネル: システム音声のプロセスタップ（会議相手の声）
-// 使い方: MeetingScribeRecorder <output.m4a>   SIGINT/SIGTERM で停止・ファイナライズ
+// 使い方: MeetingScribeRecorder <output.m4a> [live-pcm-path]   SIGINT/SIGTERM で停止・ファイナライズ
+//   live-pcm-path を渡すと f32le インターリーブ 2ch の raw PCM を並行して書く（ライブ文字起こし用）。
+//   サンプルレートは <live-pcm-path>.rate に書く
 // ビルド: ./build.sh（macOS 14.4+ の Core Audio process tap API を使用）
 import AVFoundation
 import CoreAudio
@@ -74,8 +76,11 @@ func nominalSampleRate(_ device: AudioObjectID) -> Double {
 
 // MARK: - セットアップ
 
-guard CommandLine.arguments.count == 2 else { fail("usage: MeetingScribeRecorder <output.m4a>") }
+guard (2...3).contains(CommandLine.arguments.count) else {
+    fail("usage: MeetingScribeRecorder <output.m4a> [live-pcm-path]")
+}
 let outputURL = URL(fileURLWithPath: CommandLine.arguments[1])
+let livePCMPath = CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : nil
 
 let micDevice = defaultInputDevice()
 let micChannels = max(1, inputChannelCount(micDevice))
@@ -127,6 +132,18 @@ do {
     )
 } catch {
     fail("出力ファイルを作成できません: \(error.localizedDescription)")
+}
+
+// ライブ文字起こし用の raw PCM サイドカー。開けなくても録音は続ける
+var liveHandle: FileHandle?
+if let livePCMPath {
+    FileManager.default.createFile(atPath: livePCMPath, contents: nil)
+    liveHandle = FileHandle(forWritingAtPath: livePCMPath)
+    if liveHandle == nil {
+        FileHandle.standardError.write("warning: live pcm を開けません: \(livePCMPath)\n".data(using: .utf8)!)
+    } else {
+        try? String(Int(sampleRate)).write(toFile: livePCMPath + ".rate", atomically: true, encoding: .utf8)
+    }
 }
 
 // MARK: - タップのキープアライブ
@@ -192,13 +209,28 @@ check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, i
     }
     let micSources = channels.prefix(micChannels)
     let tapSources = channels.dropFirst(micChannels)
+    var interleaved: [Float] = liveHandle == nil ? [] : .init(repeating: 0, count: frameCount * 2)
     for frame in 0..<frameCount {
         var mic: Float = 0
         for source in micSources { mic += sample(source, frame) }
-        left[frame] = micSources.isEmpty ? 0 : mic / Float(micSources.count)
+        let l = micSources.isEmpty ? 0 : mic / Float(micSources.count)
+        left[frame] = l
         var tap: Float = 0
         for source in tapSources { tap += sample(source, frame) }
-        right[frame] = tapSources.isEmpty ? 0 : tap / Float(tapSources.count)
+        let r = tapSources.isEmpty ? 0 : tap / Float(tapSources.count)
+        right[frame] = r
+        if !interleaved.isEmpty {
+            interleaved[frame * 2] = l
+            interleaved[frame * 2 + 1] = r
+        }
+    }
+    if let handle = liveHandle {
+        do {
+            try handle.write(contentsOf: interleaved.withUnsafeBufferPointer { Data(buffer: $0) })
+        } catch {
+            FileHandle.standardError.write("warning: live pcm write failed: \(error)\n".data(using: .utf8)!)
+            liveHandle = nil
+        }
     }
     do {
         try audioFile.write(from: pcm)
@@ -226,6 +258,7 @@ func makeSignalHandler(_ sig: Int32) -> DispatchSourceSignal {
         // ioQueue 上の書き込みが終わってからファイルを閉じる
         ioQueue.sync {}
         audioFile.close()
+        try? liveHandle?.close()
         AudioHardwareDestroyAggregateDevice(aggregateID)
         AudioHardwareDestroyProcessTap(tapID)
         exit(0)

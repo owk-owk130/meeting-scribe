@@ -5,7 +5,7 @@
 テスト基盤はない。変更したら以下を通す。
 
 ```sh
-bash -n record.sh transcribe.sh build.sh config.sh config.example.sh
+bash -n record.sh transcribe.sh transcribe-live.sh whisper-common.sh build.sh config.sh config.example.sh
 swiftc -O MeetingScribe.swift -o /tmp/check        # 稼働中の .app を壊さないよう出力先を分ける
 ./transcribe.sh ~/MeetingRecordings/<file>.m4a     # パイプライン全体（whisper + codex で数分）
 ```
