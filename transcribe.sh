@@ -6,15 +6,9 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.sh"
+source "$SCRIPT_DIR/whisper-common.sh"
 
-WHISPER_BIN="/opt/homebrew/bin/whisper-cli"
-FFMPEG_BIN="/opt/homebrew/bin/ffmpeg"
-FFPROBE_BIN="/opt/homebrew/bin/ffprobe"
-MODEL="$SCRIPT_DIR/models/ggml-large-v3-turbo.bin"
-VAD_MODEL="$SCRIPT_DIR/models/ggml-silero-v5.1.2.bin"
-WHISPER_LANG="ja"
 TRANSCRIBING_PID_FILE="$SCRIPT_DIR/.transcribing.pid"
-LOG_FILE="$SCRIPT_DIR/record.log"
 
 notify() {
   osascript -e "display notification \"$1\" with title \"MeetingScribe\"" 2>/dev/null || true
@@ -94,12 +88,6 @@ print(data["summary"].strip())
 PY
 }
 
-# VAD（音声区間検出）を必ず通す。無音・環境ノイズだけの区間は whisper が幻聴を出すため
-run_whisper() {  # $1: 16kHz mono wav, $2: 出力ベースパス（.json / .txt が付く）, $3: 出力形式フラグ
-  "$WHISPER_BIN" -m "$MODEL" -l "$WHISPER_LANG" -f "$1" "$3" -of "$2" -np \
-    --vad --vad-model "$VAD_MODEL" 2>>"$LOG_FILE"
-}
-
 CHANNELS="$("$FFPROBE_BIN" -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 "$AUDIO")"
 
 if [[ "$CHANNELS" == "2" ]]; then
@@ -115,35 +103,8 @@ if [[ "$CHANNELS" == "2" ]]; then
   run_whisper "$TMP_DIR/self.wav" "$TMP_DIR/self" -oj || fail "whisper の実行に失敗しました（自分）"
   run_whisper "$TMP_DIR/others.wav" "$TMP_DIR/others" -oj || fail "whisper の実行に失敗しました（相手）"
 
-  /usr/bin/python3 - "$TMP_DIR/self.json" "$TMP_DIR/others.json" > "$BODY" <<'PY' || fail "文字起こし結果のマージに失敗しました"
-import json
-import sys
-
-
-def load(path, label):
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except OSError:
-        return []
-    segments = []
-    for seg in data.get("transcription", []):
-        text = seg["text"].strip()
-        if text:
-            segments.append((seg["offsets"]["from"], label, text))
-    return segments
-
-
-mine = load(sys.argv[1], "自分")
-others = load(sys.argv[2], "相手")
-if others:
-    for offset_ms, label, text in sorted(mine + others):
-        minutes, seconds = divmod(offset_ms // 1000, 60)
-        print(f"- [{minutes:02d}:{seconds:02d}] **{label}**: {text}")
-else:
-    for _, _, text in sorted(mine):
-        print(text)
-PY
+  /usr/bin/python3 "$SCRIPT_DIR/merge_transcript.py" "$TMP_DIR/self.json" "$TMP_DIR/others.json" \
+    > "$BODY" || fail "文字起こし結果のマージに失敗しました"
 else
   WAV="$TMP_DIR/audio.wav"
   "$FFMPEG_BIN" -nostdin -hide_banner -y -i "$AUDIO" -ac 1 -ar 16000 "$WAV" 2>>"$LOG_FILE" \
