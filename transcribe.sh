@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.sh"
 
 WHISPER_BIN="/opt/homebrew/bin/whisper-cli"
+FFMPEG_BIN="/opt/homebrew/bin/ffmpeg"
+FFPROBE_BIN="/opt/homebrew/bin/ffprobe"
 MODEL="$SCRIPT_DIR/models/ggml-large-v3-turbo.bin"
 VAD_MODEL="$SCRIPT_DIR/models/ggml-silero-v5.1.2.bin"
 WHISPER_LANG="ja"
@@ -27,6 +29,7 @@ fail() {
 AUDIO="${1:-}"
 [[ -f "$AUDIO" ]] || fail "音声ファイルが見つかりません: $AUDIO"
 [[ -x "$WHISPER_BIN" ]] || fail "whisper-cli がありません (brew install whisper-cpp)"
+[[ -x "$FFMPEG_BIN" && -x "$FFPROBE_BIN" ]] || fail "ffmpeg がありません (brew install ffmpeg)"
 [[ -f "$MODEL" ]] || fail "モデルがありません: $MODEL"
 [[ -f "$VAD_MODEL" ]] || fail "VAD モデルがありません: $VAD_MODEL"
 
@@ -97,11 +100,11 @@ run_whisper() {  # $1: 16kHz mono wav, $2: 出力ベースパス（.json / .txt 
     --vad --vad-model "$VAD_MODEL" 2>>"$LOG_FILE"
 }
 
-CHANNELS="$(ffprobe -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 "$AUDIO")"
+CHANNELS="$("$FFPROBE_BIN" -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 "$AUDIO")"
 
 if [[ "$CHANNELS" == "2" ]]; then
   # L=自分 / R=相手 に分離して 16kHz mono wav へ
-  ffmpeg -nostdin -hide_banner -y -i "$AUDIO" \
+  "$FFMPEG_BIN" -nostdin -hide_banner -y -i "$AUDIO" \
     -filter_complex "[0:a]channelsplit=channel_layout=stereo[l][r]" \
     -map "[l]" -ac 1 -ar 16000 "$TMP_DIR/self.wav" \
     -map "[r]" -ac 1 -ar 16000 "$TMP_DIR/others.wav" \
@@ -143,7 +146,7 @@ else:
 PY
 else
   WAV="$TMP_DIR/audio.wav"
-  ffmpeg -nostdin -hide_banner -y -i "$AUDIO" -ac 1 -ar 16000 "$WAV" 2>>"$LOG_FILE" \
+  "$FFMPEG_BIN" -nostdin -hide_banner -y -i "$AUDIO" -ac 1 -ar 16000 "$WAV" 2>>"$LOG_FILE" \
     || fail "wav 変換に失敗しました"
   run_whisper "$WAV" "$TMP_DIR/plain" -otxt || fail "whisper の実行に失敗しました"
   cp "$TMP_DIR/plain.txt" "$BODY"
