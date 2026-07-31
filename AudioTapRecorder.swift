@@ -92,7 +92,6 @@ tapDescription.isPrivate = true
 var tapID = AudioObjectID(kAudioObjectUnknown)
 check(AudioHardwareCreateProcessTap(tapDescription, &tapID), "create process tap")
 
-// マイクとタップを1つの集約デバイスにまとめる
 let aggregateDescription: [String: Any] = [
     kAudioAggregateDeviceNameKey: "MeetingScribe Recorder",
     kAudioAggregateDeviceUIDKey: UUID().uuidString,

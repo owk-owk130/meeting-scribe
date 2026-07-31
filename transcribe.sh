@@ -38,7 +38,6 @@ BASENAME="$(basename "$AUDIO")"
 STAMP="$(date +%Y-%m-%d-%H%M%S)"   # 秒まで含めて同名ノートの上書きを防ぐ
 BODY="$TMP_DIR/body.md"
 
-# 文字起こし本文から タイトル / タグ / 要約 を codex に作らせる。
 # 出力は 1 行目=タイトル、2 行目=タグ(カンマ区切り)、3 行目以降=要約。失敗時は非ゼロ
 generate_meta() {
   [[ -x "${CODEX_BIN:-}" ]] || return 1
@@ -91,15 +90,13 @@ PY
 CHANNELS="$("$FFPROBE_BIN" -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 "$AUDIO")"
 
 if [[ "$CHANNELS" == "2" ]]; then
-  # L=自分 / R=相手 に分離して 16kHz mono wav へ
+  # L=自分 / R=相手
   "$FFMPEG_BIN" -nostdin -hide_banner -y -i "$AUDIO" \
     -filter_complex "[0:a]channelsplit=channel_layout=stereo[l][r]" \
     -map "[l]" -ac 1 -ar 16000 "$TMP_DIR/self.wav" \
     -map "[r]" -ac 1 -ar 16000 "$TMP_DIR/others.wav" \
     2>>"$LOG_FILE" || fail "チャンネル分離に失敗しました"
 
-  # 各チャンネルを個別に文字起こしし、タイムスタンプでマージする。
-  # 相手チャンネルに発話がなければ（対面会議など）ラベルなしのプレーン出力にする
   run_whisper "$TMP_DIR/self.wav" "$TMP_DIR/self" -oj || fail "whisper の実行に失敗しました（自分）"
   run_whisper "$TMP_DIR/others.wav" "$TMP_DIR/others" -oj || fail "whisper の実行に失敗しました（相手）"
 

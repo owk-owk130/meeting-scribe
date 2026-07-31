@@ -28,7 +28,6 @@ kill_jobs() {
 }
 trap 'kill_jobs; exit 0' TERM INT
 
-# recorder がサンプルレートを書くまで待つ
 for _ in $(seq 1 50); do
   [[ -s "$PCM.rate" ]] && break
   sleep 0.2
@@ -44,7 +43,6 @@ while sleep "$INTERVAL"; do
   CHUNK=$(( SIZE - OFFSET ))
   (( CHUNK >= RATE * BYTES_PER_FRAME * 2 )) || continue  # 2 秒未満なら次の間隔まで待つ
 
-  # 前回オフセット以降を L/R 分離して 16kHz mono wav へ
   tail -c "+$((OFFSET + 1))" "$PCM" | head -c "$CHUNK" \
     | "$FFMPEG_BIN" -hide_banner -y -f f32le -ar "$RATE" -ac 2 -i pipe:0 \
         -filter_complex "[0:a]channelsplit=channel_layout=stereo[l][r]" \

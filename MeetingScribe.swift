@@ -117,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
-        // 起動時に実状態と同期（アプリ再起動時に録音が生きているケース）
+        // アプリ再起動時に録音が生きているケースがあるので実状態と同期する
         syncState()
         // .common モードに登録しないとメニュー表示中（eventTracking）にタイマーが止まる
         let poll = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
@@ -214,7 +214,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: 状態管理
 
-    /// record.sh にコマンドを投げて（省略可）、最新の status で UI 状態を更新する
     private func syncState(after command: String? = nil, then completion: ((ShellResult?) -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = command.map { runRecordScript($0) }
@@ -246,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: ライブ文字起こしウィンドウ
 
-    // フォーカスを奪わず常に手前に浮くパネル。会議アプリの上に重ねて使う
+    // 会議アプリの上に重ねて使うので、フォーカスを奪わない（nonactivating）ことが必須
     private func makeLivePanel() -> NSPanel {
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
