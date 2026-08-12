@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-# merge_transcript.py — whisper の JSON 出力 2 つ（自分/相手）を時刻順にマージして出力する
-# 使い方: merge_transcript.py <self.json> <others.json> [--offset-ms N] [--labels auto|always]
-#   auto:   Markdown 出力（ノート用）。相手チャンネルに発話がなければラベルなしのプレーン出力（対面会議など）
-#   always: 常に時刻・ラベル付きのプレーンテキスト（ライブパネル用。Markdown は描画されないため装飾しない）
 import argparse
 import json
 

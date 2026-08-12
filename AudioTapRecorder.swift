@@ -1,10 +1,3 @@
-// AudioTapRecorder — マイクとシステム音声を1つのステレオ m4a に録音する CLI
-//   L チャンネル: デフォルト入力デバイス（自分の声）
-//   R チャンネル: システム音声のプロセスタップ（会議相手の声）
-// 使い方: MeetingScribeRecorder <output.m4a> [live-pcm-path]   SIGINT/SIGTERM で停止・ファイナライズ
-//   live-pcm-path を渡すと f32le インターリーブ 2ch の raw PCM を並行して書く（ライブ文字起こし用）。
-//   サンプルレートは <live-pcm-path>.rate に書く
-// ビルド: ./build.sh（macOS 14.4+ の Core Audio process tap API を使用）
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -17,8 +10,6 @@ func fail(_ message: String) -> Never {
 func check(_ status: OSStatus, _ what: String) {
     if status != noErr { fail("\(what) failed (OSStatus \(status))") }
 }
-
-// MARK: - Core Audio プロパティ取得ヘルパー
 
 func propertyAddress(_ selector: AudioObjectPropertySelector,
                      scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
@@ -73,8 +64,6 @@ func nominalSampleRate(_ device: AudioObjectID) -> Double {
     check(AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate), "get sample rate")
     return rate
 }
-
-// MARK: - セットアップ
 
 guard (2...3).contains(CommandLine.arguments.count) else {
     fail("usage: MeetingScribeRecorder <output.m4a> [live-pcm-path]")
@@ -133,7 +122,7 @@ do {
     fail("出力ファイルを作成できません: \(error.localizedDescription)")
 }
 
-// ライブ文字起こし用の raw PCM サイドカー。開けなくても録音は続ける
+// ライブ用 PCM を開けなくても録音は続ける
 var liveHandle: FileHandle?
 if let livePCMPath {
     FileManager.default.createFile(atPath: livePCMPath, contents: nil)
@@ -144,8 +133,6 @@ if let livePCMPath {
         try? String(Int(sampleRate)).write(toFile: livePCMPath + ".rate", atomically: true, encoding: .utf8)
     }
 }
-
-// MARK: - タップのキープアライブ
 
 // システム音声が完全に無音だとタップが止まり、集約デバイスの IO コールバックごと
 // 止まってしまう。無音を常時再生してタップを流しっぱなしにする
@@ -171,8 +158,6 @@ NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChang
     startSilenceEngine()
 }
 startSilenceEngine()
-
-// MARK: - 録音ループ
 
 // 集約デバイスの入力バッファは「サブデバイス（マイク）→ タップ」の順にチャンネルが並ぶ。
 // 先頭 micChannels ch を L（自分）、残りを R（相手）に平均して書き込む。
@@ -245,8 +230,6 @@ check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, i
 
 check(AudioDeviceStart(aggregateID, ioProcID), "start aggregate device")
 FileHandle.standardError.write("recording to \(outputURL.path) @\(Int(sampleRate))Hz\n".data(using: .utf8)!)
-
-// MARK: - 終了処理（SIGINT / SIGTERM でファイナライズ）
 
 func makeSignalHandler(_ sig: Int32) -> DispatchSourceSignal {
     signal(sig, SIG_IGN)

@@ -1,9 +1,5 @@
-// MeetingScribe — 会議録音パイプラインのメニューバーフロントエンド
-// ビルド: ./build.sh
 import AppKit
 import Foundation
-
-// MARK: - 設定
 
 // .app は build.sh がプロジェクトディレクトリ内に生成するので、バンドルの親 = スクリプト群の場所
 let scriptDir = URL(fileURLWithPath: Bundle.main.bundlePath).deletingLastPathComponent().path
@@ -14,8 +10,6 @@ let liveTranscriptFile = "\(scriptDir)/.live-transcript.md"
 let idleIcon = "🎙"
 let recordingIcon = "🔴"
 let recentNotesCount = 5
-
-// MARK: - シェル実行
 
 struct ShellResult {
     let stdout: String
@@ -51,7 +45,6 @@ func runRecordScript(_ command: String) -> ShellResult {
     runShell("/bin/bash", [recordScript, command])
 }
 
-// config.sh が読めないときはフォールバックせず、起動時にアラートで明示する
 func loadConfig() -> (recordingsDir: String, vaultMeetingsDir: String, liveTranscribe: Bool, configLoaded: Bool) {
     let result = runShell("/bin/bash", [
         "-c", "source \"\(scriptDir)/config.sh\" && printf '%s\\n%s\\n%s' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\" \"${LIVE_TRANSCRIBE:-1}\"",
@@ -64,8 +57,6 @@ func loadConfig() -> (recordingsDir: String, vaultMeetingsDir: String, liveTrans
 }
 
 let (recordingsDir, vaultMeetingsDir, liveTranscribeEnabled, configLoaded) = loadConfig()
-
-// MARK: - AppDelegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
@@ -126,8 +117,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         RunLoop.main.add(poll, forMode: .common)
         pollTimer = poll
     }
-
-    // MARK: メニュー構築
 
     private func buildMenu() {
         menu.delegate = self
@@ -212,8 +201,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: 状態管理
-
     private func syncState(after command: String? = nil, then completion: ((ShellResult?) -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = command.map { runRecordScript($0) }
@@ -242,8 +229,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             hideLivePanel()
         }
     }
-
-    // MARK: ライブ文字起こしウィンドウ
 
     // 会議アプリの上に重ねて使うので、フォーカスを奪わない（nonactivating）ことが必須
     private func makeLivePanel() -> NSPanel {
@@ -368,8 +353,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.title = String(format: "%@ %02d:%02d", recordingIcon, elapsed / 60, elapsed % 60)
     }
 
-    // MARK: アクション
-
     @objc private func toggleRecording() {
         toggleItem.isEnabled = false
         syncState(after: "toggle") { [weak self] result in
@@ -411,8 +394,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.runModal()
     }
 }
-
-// MARK: - エントリポイント
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

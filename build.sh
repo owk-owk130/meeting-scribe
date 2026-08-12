@@ -1,5 +1,4 @@
 #!/bin/bash
-# build.sh — MeetingScribe.swift をビルドして .app バンドルを生成する
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -1,7 +1,4 @@
 #!/bin/bash
-# transcribe-live.sh — 録音中の raw PCM を一定間隔で文字起こしし、transcript へ追記する
-# 使い方: transcribe-live.sh <live.pcm> <transcript-out>
-# record.sh start が起動し、stop で kill される（pcm が消えた時点でも自然に終了する）
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

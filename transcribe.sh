@@ -1,7 +1,4 @@
 #!/bin/bash
-# transcribe.sh — 録音ファイルを文字起こしして Obsidian Vault にノートを作る
-# 使い方: transcribe.sh <audio-file>
-# 実行中は .transcribing.pid を置き、record.sh status が "transcribing" を返せるようにする
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -38,7 +35,6 @@ BASENAME="$(basename "$AUDIO")"
 STAMP="$(date +%Y-%m-%d-%H%M%S)"   # 秒まで含めて同名ノートの上書きを防ぐ
 BODY="$TMP_DIR/body.md"
 
-# 出力は 1 行目=タイトル、2 行目=タグ(カンマ区切り)、3 行目以降=要約。失敗時は非ゼロ
 generate_meta() {
   [[ -x "${CODEX_BIN:-}" ]] || return 1
 
@@ -79,7 +75,6 @@ import json
 import re
 import sys
 
-# 3 フィールドは schema で必須にしてあるので、欠けていれば例外で落ちてフォールバックに回る
 with open(sys.argv[1], encoding="utf-8") as f:
     data = json.load(f)
 
@@ -106,7 +101,6 @@ PY
 CHANNELS="$("$FFPROBE_BIN" -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 "$AUDIO")"
 
 if [[ "$CHANNELS" == "2" ]]; then
-  # L=自分 / R=相手
   "$FFMPEG_BIN" -nostdin -hide_banner -y -i "$AUDIO" \
     -filter_complex "[0:a]channelsplit=channel_layout=stereo[l][r]" \
     -map "[l]" -ac 1 -ar 16000 "$TMP_DIR/self.wav" \
