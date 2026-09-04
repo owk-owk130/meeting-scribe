@@ -83,6 +83,7 @@ cmd_start() {
   live="${LIVE_TRANSCRIBE:-1}"
   outfile="$RECORDINGS_DIR/meeting-$(date +%Y%m%d-%H%M%S).m4a"
   stop_live_watcher
+  export SILENCE_STOP_MINS SILENCE_THRESHOLD_DB MAX_RECORD_MINS RECORD_SCRIPT="$SCRIPT_DIR/record.sh"
   if [[ "$live" == "1" ]]; then
     : > "$LIVE_TRANSCRIPT"
     nohup "$RECORDER" "$outfile" "$LIVE_PCM" >>"$LOG_FILE" 2>&1 &
@@ -107,6 +108,7 @@ cmd_start() {
 }
 
 cmd_stop() {
+  local reason="${1:-録音を停止しました}"
   if ! is_recording; then
     clear_recording_state
     stop_live_watcher
@@ -130,7 +132,7 @@ cmd_stop() {
 
   if [[ -n "$outfile" && -f "$outfile" ]]; then
     start_transcription "$outfile"
-    notify "録音を停止しました。文字起こし中…"
+    notify "${reason}。文字起こし中…"
     echo "stopped: $outfile (transcribing in background)"
   else
     echo "stopped (no output file)" >&2
@@ -163,9 +165,9 @@ cmd_transcribe() {
 case "${1:-}" in
   status)     cmd_status ;;
   start)      cmd_start ;;
-  stop)       cmd_stop ;;
+  stop)       cmd_stop "${2:-}" ;;
   toggle)     if is_recording; then cmd_stop; else cmd_start; fi ;;
   pending)    cmd_pending ;;
   transcribe) cmd_transcribe "${2:-}" ;;
-  *) echo "usage: $0 toggle|start|stop|status|pending|transcribe <file>" >&2; exit 1 ;;
+  *) echo "usage: $0 toggle|start|stop [reason]|status|pending|transcribe <file>" >&2; exit 1 ;;
 esac

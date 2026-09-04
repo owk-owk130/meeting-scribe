@@ -71,6 +71,15 @@ guard (2...3).contains(CommandLine.arguments.count) else {
 let outputURL = URL(fileURLWithPath: CommandLine.arguments[1])
 let livePCMPath = CommandLine.arguments.count == 3 ? CommandLine.arguments[2] : nil
 
+let environment = ProcessInfo.processInfo.environment
+func envMinutes(_ key: String) -> TimeInterval {
+    (environment[key].flatMap(Double.init) ?? 0) * 60
+}
+let silenceStopSecs = envMinutes("SILENCE_STOP_MINS")
+let maxRecordSecs = envMinutes("MAX_RECORD_MINS")
+let silenceThresholdDB = environment["SILENCE_THRESHOLD_DB"].flatMap(Double.init) ?? -50
+let recordScript = environment["RECORD_SCRIPT"]
+
 let micDevice = defaultInputDevice()
 let micChannels = max(1, inputChannelCount(micDevice))
 FileHandle.standardError.write("input device: \(deviceName(micDevice)) (\(micChannels)ch)\n".data(using: .utf8)!)
@@ -165,6 +174,45 @@ startSilenceEngine()
 let ioQueue = DispatchQueue(label: "recorder.io")
 var ioProcID: AudioDeviceIOProcID?
 var writeFailed = false
+
+let recordingStartedAt = Date()
+var lastSoundAt = recordingStartedAt
+var lastLevelLogAt = recordingStartedAt
+var levelMaxDB = -Double.infinity
+var autoStopRequested = false
+
+func requestAutoStop(_ reason: String) {
+    guard !autoStopRequested else { return }
+    autoStopRequested = true
+    FileHandle.standardError.write("auto-stop: \(reason)\n".data(using: .utf8)!)
+    guard let recordScript else { kill(getpid(), SIGINT); return }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/bash")
+    process.arguments = [recordScript, "stop", reason]
+    do { try process.run() } catch { kill(getpid(), SIGINT) }
+}
+
+func checkAutoStop(sumOfSquares: Float, frames: Int) {
+    let now = Date()
+    let rms = (sumOfSquares / Float(frames)).squareRoot()
+    let db = rms > 0 ? 20 * log10(Double(rms)) : -Double.infinity
+    if silenceStopSecs > 0 {
+        levelMaxDB = max(levelMaxDB, db)
+        if db > silenceThresholdDB { lastSoundAt = now }
+        if now.timeIntervalSince(lastLevelLogAt) >= 60 {
+            FileHandle.standardError.write(String(format: "level: max %.1f dBFS / 60s (threshold %.0f)\n",
+                                                  levelMaxDB, silenceThresholdDB).data(using: .utf8)!)
+            lastLevelLogAt = now
+            levelMaxDB = -Double.infinity
+        }
+        if now.timeIntervalSince(lastSoundAt) >= silenceStopSecs {
+            requestAutoStop("無音が \(Int(silenceStopSecs / 60)) 分続いたため録音を自動停止しました")
+        }
+    }
+    if maxRecordSecs > 0, now.timeIntervalSince(recordingStartedAt) >= maxRecordSecs {
+        requestAutoStop("録音が \(Int(maxRecordSecs / 60)) 分に達したため自動停止しました")
+    }
+}
 check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, inputData, _, _, _ in
     // 各バッファ内はインターリーブの可能性があるため (データ位置, ストライド) で全チャンネルを平坦化する。
     // システム音声が鳴っていないときタップのバッファは 0 フレームになるので、
@@ -194,6 +242,7 @@ check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, i
     let micSources = channels.prefix(micChannels)
     let tapSources = channels.dropFirst(micChannels)
     var interleaved: [Float] = liveHandle == nil ? [] : .init(repeating: 0, count: frameCount * 2)
+    var sumOfSquares: Float = 0
     for frame in 0..<frameCount {
         var mic: Float = 0
         for source in micSources { mic += sample(source, frame) }
@@ -203,10 +252,14 @@ check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, i
         for source in tapSources { tap += sample(source, frame) }
         let r = tapSources.isEmpty ? 0 : tap / Float(tapSources.count)
         right[frame] = r
+        sumOfSquares += max(l * l, r * r)
         if !interleaved.isEmpty {
             interleaved[frame * 2] = l
             interleaved[frame * 2 + 1] = r
         }
+    }
+    if silenceStopSecs > 0 || maxRecordSecs > 0 {
+        checkAutoStop(sumOfSquares: sumOfSquares, frames: frameCount)
     }
     if let handle = liveHandle {
         do {

@@ -9,3 +9,8 @@ CODEX_BIN="$HOME/.local/share/mise/shims/codex"
 LIVE_TRANSCRIBE=1
 
 LIVE_INTERVAL_SECS=30
+
+# 自動停止。無音判定は 1 バッファの RMS が閾値 dBFS 以下。いずれも 0 で無効
+SILENCE_STOP_MINS=10
+SILENCE_THRESHOLD_DB=-50
+MAX_RECORD_MINS=480
