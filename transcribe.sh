@@ -122,7 +122,12 @@ else
   cp "$TMP_DIR/plain.txt" "$BODY"
 fi
 
-[[ -s "$BODY" ]] || fail "発話が検出されませんでした（無音の録音の可能性）"
+if [[ ! -s "$BODY" ]]; then
+  rm -f "$AUDIO"
+  echo "silent: deleted $AUDIO" >&2
+  notify "発話が検出されなかったため音源を削除しました: $BASENAME"
+  exit 0
+fi
 
 TITLE="会議メモ $STAMP"
 TAGS="meeting"
