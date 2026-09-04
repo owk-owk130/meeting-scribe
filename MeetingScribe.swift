@@ -41,8 +41,8 @@ func runShell(_ launchPath: String, _ args: [String]) -> ShellResult {
 }
 
 @discardableResult
-func runRecordScript(_ command: String) -> ShellResult {
-    runShell("/bin/bash", [recordScript, command])
+func runRecordScript(_ args: [String]) -> ShellResult {
+    runShell("/bin/bash", [recordScript] + args)
 }
 
 func loadConfig() -> (recordingsDir: String, vaultMeetingsDir: String, liveTranscribe: Bool, configLoaded: Bool) {
@@ -62,6 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
     private let recentNotesMenu = NSMenu()
+    private let pendingItem = NSMenuItem(title: "未完了の文字起こし", action: nil, keyEquivalent: "")
+    private let pendingMenu = NSMenu()
 
     private var recordingStartDate: Date?
     private var isRecording: Bool { recordingStartDate != nil }
@@ -139,6 +141,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setRecentNotesPlaceholder("ノートがありません")
         menu.addItem(recentItem)
 
+        pendingItem.submenu = pendingMenu
+        pendingItem.isHidden = true
+        pendingMenu.autoenablesItems = false
+        menu.addItem(pendingItem)
+
         let openRecordings = NSMenuItem(title: "録音フォルダを開く", action: #selector(openRecordingsFolder), keyEquivalent: "")
         openRecordings.target = self
         menu.addItem(openRecordings)
@@ -156,6 +163,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         transcribingItem.isHidden = !(scriptAvailable && !isRecording && isTranscribing)
         // iCloud フォルダの列挙は遅いので、メインメニューを開いた時点で投げておく
         rebuildRecentNotesAsync()
+        rebuildPendingAsync()
+    }
+
+    private func rebuildPendingAsync() {
+        guard scriptAvailable else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let paths = runRecordScript(["pending"]).stdout.split(separator: "\n").map(String.init)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.pendingItem.isHidden = paths.isEmpty
+                self.pendingItem.title = "未完了の文字起こし (\(paths.count))"
+                self.pendingMenu.removeAllItems()
+                for path in paths {
+                    let item = NSMenuItem(title: URL(fileURLWithPath: path).lastPathComponent,
+                                          action: #selector(self.transcribePending(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = path
+                    item.isEnabled = !self.isTranscribing
+                    self.pendingMenu.addItem(item)
+                }
+            }
+        }
+    }
+
+    @objc private func transcribePending(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        syncState(after: "transcribe", path) { [weak self] result in
+            if let result, result.exitCode != 0 {
+                self?.showAlert("文字起こしを開始できませんでした", detail: result.stderr)
+            }
+        }
     }
 
     private func setRecentNotesPlaceholder(_ title: String) {
@@ -201,10 +239,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func syncState(after command: String? = nil, then completion: ((ShellResult?) -> Void)? = nil) {
+    private func syncState(after command: String..., then completion: ((ShellResult?) -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = command.map { runRecordScript($0) }
-            let status = runRecordScript("status").stdout
+            let result = command.isEmpty ? nil : runRecordScript(command)
+            let status = runRecordScript(["status"]).stdout
             DispatchQueue.main.async {
                 completion?(result)
                 self?.applyStatus(status)

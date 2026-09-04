@@ -15,6 +15,7 @@ record.log
 .recording.file
 .recording.started
 .transcribing.pid
+.transcribing.file
 .live.pcm
 .live.pcm.rate
 .live.pid

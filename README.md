@@ -48,6 +48,8 @@ open MeetingScribe.app
 - 「録音停止」で文字起こしが走り、完了すると `Meetings/` にノートができる
 - 「最近のノート」から直近 5 件を Obsidian で開ける
 - 進行状況は通知で知らせる
+- 文字起こしが失敗・中断した録音は「未完了の文字起こし」に出る。選ぶと文字起こしをやり直す
+  （ノートの frontmatter `recording:` に現れない録音を未完了とみなす。要らない録音は録音フォルダから消す）
 
 ### ライブ文字起こし
 
@@ -105,7 +107,7 @@ open MeetingScribe.app
 | `AudioTapRecorder.swift` | 録音 CLI。L=デフォルト入力（自分）/ R=システム音声タップ（相手）のステレオ m4a を書く |
 | `build.sh` | ビルド + `.app` バンドル生成 |
 | `config.sh` | 共有設定（保存先パス、codex のパス） |
-| `record.sh` | 録音の開始/停止/状態確認 |
+| `record.sh` | 録音の開始/停止/状態確認、未完了録音の列挙と文字起こしの再実行 |
 | `transcribe.sh` | 文字起こし、要約・タイトル・タグ生成、ノート生成 |
 | `transcribe-live.sh` | 録音中の raw PCM を定期的に文字起こしするウォッチャー |
 | `whisper-common.sh` | whisper 呼び出しの共有定義（transcribe.sh / transcribe-live.sh が source） |

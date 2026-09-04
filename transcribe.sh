@@ -6,6 +6,7 @@ source "$SCRIPT_DIR/config.sh"
 source "$SCRIPT_DIR/whisper-common.sh"
 
 TRANSCRIBING_PID_FILE="$SCRIPT_DIR/.transcribing.pid"
+TRANSCRIBING_FILE_FILE="$SCRIPT_DIR/.transcribing.file"
 
 notify() {
   osascript -e "display notification \"$1\" with title \"MeetingScribe\"" 2>/dev/null || true
@@ -27,9 +28,10 @@ AUDIO="${1:-}"
 mkdir -p "$VAULT_MEETINGS_DIR"
 
 echo $$ > "$TRANSCRIBING_PID_FILE"
+echo "$AUDIO" > "$TRANSCRIBING_FILE_FILE"
 TMP_DIR="$(mktemp -d -t meetingscribe)"
-# pid ファイルは自分が書いたときだけ消す（並行実行時に他方の実行中表示を壊さない）
-trap '[[ "$(cat "$TRANSCRIBING_PID_FILE" 2>/dev/null)" == "$$" ]] && rm -f "$TRANSCRIBING_PID_FILE"; rm -rf "$TMP_DIR"' EXIT
+# 状態ファイルは自分が書いたときだけ消す（並行実行時に他方の実行中表示を壊さない）
+trap '[[ "$(cat "$TRANSCRIBING_PID_FILE" 2>/dev/null)" == "$$" ]] && rm -f "$TRANSCRIBING_PID_FILE" "$TRANSCRIBING_FILE_FILE"; rm -rf "$TMP_DIR"' EXIT
 
 BASENAME="$(basename "$AUDIO")"
 STAMP="$(date +%Y-%m-%d-%H%M%S)"   # 秒まで含めて同名ノートの上書きを防ぐ

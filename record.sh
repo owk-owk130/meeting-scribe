@@ -9,6 +9,7 @@ PID_FILE="$SCRIPT_DIR/.recording.pid"
 FILE_FILE="$SCRIPT_DIR/.recording.file"
 STARTED_FILE="$SCRIPT_DIR/.recording.started"
 TRANSCRIBING_PID_FILE="$SCRIPT_DIR/.transcribing.pid"
+TRANSCRIBING_FILE_FILE="$SCRIPT_DIR/.transcribing.file"
 LOG_FILE="$SCRIPT_DIR/record.log"
 LIVE_PCM="$SCRIPT_DIR/.live.pcm"
 LIVE_TRANSCRIPT="$SCRIPT_DIR/.live-transcript.md"
@@ -28,6 +29,17 @@ is_recording() {
 is_transcribing() {
   [[ -f "$TRANSCRIBING_PID_FILE" ]] || return 1
   [[ "$(ps -p "$(cat "$TRANSCRIBING_PID_FILE")" -o comm= 2>/dev/null)" == *bash* ]]
+}
+
+transcribing_file() {
+  is_transcribing && cat "$TRANSCRIBING_FILE_FILE" 2>/dev/null
+}
+
+start_transcription() {
+  nohup "$SCRIPT_DIR/transcribe.sh" "$1" >>"$LOG_FILE" 2>&1 &
+  # transcribe.sh 自身が書くまでの間も status / pending が正しく答えられるよう親側でも書く
+  echo $! > "$TRANSCRIBING_PID_FILE"
+  echo "$1" > "$TRANSCRIBING_FILE_FILE"
 }
 
 clear_recording_state() {
@@ -117,9 +129,7 @@ cmd_stop() {
   stop_live_watcher
 
   if [[ -n "$outfile" && -f "$outfile" ]]; then
-    nohup "$SCRIPT_DIR/transcribe.sh" "$outfile" >>"$LOG_FILE" 2>&1 &
-    # transcribe.sh 自身が pid を書くまでの間も status が "transcribing" を返せるよう親側でも書く
-    echo $! > "$TRANSCRIBING_PID_FILE"
+    start_transcription "$outfile"
     notify "録音を停止しました。文字起こし中…"
     echo "stopped: $outfile (transcribing in background)"
   else
@@ -127,10 +137,35 @@ cmd_stop() {
   fi
 }
 
+cmd_pending() {
+  local known
+  # recording: は [a.m4a, b.m4a] のリスト形式もある
+  known="$(
+    grep -h '^recording:' "$VAULT_MEETINGS_DIR"/*.md 2>/dev/null | grep -o '[^][ ,]*\.m4a'
+    cat "$FILE_FILE" 2>/dev/null; transcribing_file
+  )"
+  (cd "$RECORDINGS_DIR" && ls -r *.m4a 2>/dev/null) \
+    | grep -vxF -f <(sed 's|.*/||' <<<"$known") | sed "s|^|$RECORDINGS_DIR/|"
+}
+
+cmd_transcribe() {
+  local audio="${1:-}"
+  [[ -f "$audio" ]] || { echo "error: file not found: $audio" >&2; return 1; }
+  if is_transcribing; then
+    echo "error: already transcribing: $(transcribing_file)" >&2
+    return 1
+  fi
+  start_transcription "$audio"
+  notify "文字起こしを開始しました: $(basename "$audio")"
+  echo "transcribing: $audio"
+}
+
 case "${1:-}" in
-  status) cmd_status ;;
-  start)  cmd_start ;;
-  stop)   cmd_stop ;;
-  toggle) if is_recording; then cmd_stop; else cmd_start; fi ;;
-  *) echo "usage: $0 toggle|start|stop|status" >&2; exit 1 ;;
+  status)     cmd_status ;;
+  start)      cmd_start ;;
+  stop)       cmd_stop ;;
+  toggle)     if is_recording; then cmd_stop; else cmd_start; fi ;;
+  pending)    cmd_pending ;;
+  transcribe) cmd_transcribe "${2:-}" ;;
+  *) echo "usage: $0 toggle|start|stop|status|pending|transcribe <file>" >&2; exit 1 ;;
 esac
