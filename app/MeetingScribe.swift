@@ -83,6 +83,7 @@ struct Config {
     let silenceThresholdDB: String
     let maxRecordMins: String
     let recordingsKeepDays: Int
+    let inboxDir: String
     let live: LiveConfig
 }
 
@@ -100,7 +101,7 @@ struct LiveConfig {
 func loadConfig() -> Config? {
     let variables = [
         "$RECORDINGS_DIR", "$VAULT_MEETINGS_DIR", "${LIVE_TRANSCRIBE:-1}", "${SILENCE_STOP_MINS:-0}",
-        "${SILENCE_THRESHOLD_DB:-}", "${MAX_RECORD_MINS:-0}", "${RECORDINGS_KEEP_DAYS:-0}",
+        "${SILENCE_THRESHOLD_DB:-}", "${MAX_RECORD_MINS:-0}", "${RECORDINGS_KEEP_DAYS:-0}", "${INBOX_DIR:-}",
         "${LIVE_INTERVAL_SECS:-30}", "$WHISPER_BIN", "$FFMPEG_BIN", "$MODEL", "$VAD_MODEL", "$WHISPER_LANG",
     ]
     let result = runShell("/bin/bash", [
@@ -111,12 +112,12 @@ func loadConfig() -> Config? {
     ])
     let lines = result.stdout.components(separatedBy: "\n")
     guard result.exitCode == 0, lines.count == variables.count, !lines[0].isEmpty, !lines[1].isEmpty else { return nil }
-    let live = LiveConfig(intervalSecs: Int(lines[7]) ?? 30, whisperBin: lines[8], ffmpegBin: lines[9],
-                          model: lines[10], vadModel: lines[11], language: lines[12],
+    let live = LiveConfig(intervalSecs: Int(lines[8]) ?? 30, whisperBin: lines[9], ffmpegBin: lines[10],
+                          model: lines[11], vadModel: lines[12], language: lines[13],
                           mergeScript: "\(rootDir)/scripts/merge_transcript.py")
     return Config(recordingsDir: lines[0], vaultMeetingsDir: lines[1], liveTranscribe: lines[2] != "0",
                   silenceStopMins: lines[3], silenceThresholdDB: lines[4], maxRecordMins: lines[5],
-                  recordingsKeepDays: Int(lines[6]) ?? 0, live: live)
+                  recordingsKeepDays: Int(lines[6]) ?? 0, inboxDir: lines[7], live: live)
 }
 
 // 録音中の raw PCM（2ch float32 インターリーブ）を一定間隔で切り出し、自分/相手を並列に whisper にかける
@@ -276,6 +277,7 @@ final class RecordingController {
     private let recorderBin: String
     private let transcribeScript: String
     private let resummarizeScript: String
+    private let importScript: String
     private let pidFile: String
     private let outFile: String
     private let livePCM: String
@@ -288,12 +290,15 @@ final class RecordingController {
     private var liveTranscriber: LiveTranscriber?
     private var transcriber: Process?
     private var transcribingPath: String?
+    private var inboxSizes: [String: UInt64] = [:]
+    private var attemptedImports = Set<String>()
 
     init(rootDir: String, config: Config) {
         self.config = config
         recorderBin = "\(Bundle.main.bundlePath)/Contents/MacOS/MeetingScribeRecorder"
         transcribeScript = "\(rootDir)/scripts/transcribe.sh"
         resummarizeScript = "\(rootDir)/scripts/resummarize.sh"
+        importScript = "\(rootDir)/scripts/import_recording.sh"
         pidFile = "\(stateDir)/recording.pid"
         outFile = "\(stateDir)/recording.file"
         livePCM = "\(stateDir)/live.pcm"
@@ -322,6 +327,7 @@ final class RecordingController {
                 clearRecordingState()
             }
         }
+        if !isTranscribing { importNextInboxRecording() }
         return isTranscribing ? .transcribing : .idle
     }
 
@@ -427,6 +433,34 @@ final class RecordingController {
         return recordings().filter { !known.contains($0) }.sorted(by: >).map { "\(config.recordingsDir)/\($0)" }
     }
 
+    // 失敗した取り込みは受け取りフォルダに残るので、同じファイルはアプリの起動中に一度しか試さない
+    private func importNextInboxRecording() {
+        guard !config.inboxDir.isEmpty else { return }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: config.inboxDir)) ?? []
+        for name in names where name.hasPrefix(".") && name.hasSuffix(".icloud") {
+            let original = String(name.dropFirst().dropLast(".icloud".count))
+            try? FileManager.default.startDownloadingUbiquitousItem(at: URL(fileURLWithPath: "\(config.inboxDir)/\(original)"))
+        }
+        var sizes: [String: UInt64] = [:]
+        for name in names where !name.hasPrefix(".") {
+            let path = "\(config.inboxDir)/\(name)"
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  let size = attributes[.size] as? UInt64 else { continue }
+            sizes[path] = size
+        }
+        let previous = inboxSizes
+        inboxSizes = sizes
+        let ready = sizes.filter { previous[$0.key] == $0.value && !attemptedImports.contains($0.key) }.keys
+        guard let path = ready.min(by: { (fileBirthDate($0) ?? .distantFuture) < (fileBirthDate($1) ?? .distantFuture) })
+        else { return }
+        attemptedImports.insert(path)
+        guard let process = try? launch(script: importScript, arguments: [path]) else { return }
+        transcriber = process
+        transcribingPath = path
+        notify("スマホの録音を取り込みます: \(URL(fileURLWithPath: path).lastPathComponent)")
+    }
+
     private func recordings() -> [String] {
         ((try? FileManager.default.contentsOfDirectory(atPath: config.recordingsDir)) ?? [])
             .filter { $0.hasSuffix(".m4a") && !$0.hasPrefix(".") }
@@ -470,7 +504,7 @@ final class RecordingController {
     }
 
     private var transcribingFile: String? {
-        if transcriber?.isRunning == true { return transcribingPath }
+        if transcriber?.isRunning == true { return read(transcribingFileFile) ?? transcribingPath }
         return isTranscribing ? read(transcribingFileFile) : nil
     }
 
@@ -554,6 +588,10 @@ final class RecordingController {
 
     private func remove(_ paths: String...) {
         for path in paths { try? FileManager.default.removeItem(atPath: path) }
+    }
+
+    private func fileBirthDate(_ path: String) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.creationDate] as? Date
     }
 
     private func fileDate(_ path: String) -> Date? {

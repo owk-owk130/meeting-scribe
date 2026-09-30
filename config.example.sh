@@ -22,3 +22,6 @@ MAX_RECORD_MINS=480
 
 # ノートになった録音をこの日数を過ぎたら消す。0 で消さない
 RECORDINGS_KEEP_DAYS=0
+
+# スマホの録音を受け取るフォルダ。置かれた音声を取り込んでノートにする。空なら無効
+INBOX_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/MeetingScribe/Inbox"
