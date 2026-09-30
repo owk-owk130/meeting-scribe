@@ -59,6 +59,11 @@ def load_event(path):
         return None
 
 
+def folded(body):
+    lines = body.rstrip("\n").split("\n")
+    return "\n".join(["> [!quote]- 文字起こし"] + [f"> {line}" if line else ">" for line in lines]) + "\n"
+
+
 def recorded_at(recording):
     m = re.search(r"(\d{8})-(\d{6})", recording)
     if not m:
@@ -128,7 +133,7 @@ note.write_text(
             "",
         ]
         + ([sections, ""] if sections else [])
-        + ["## 文字起こし", "", body]
+        + ["## 文字起こし", "", folded(body)]
     ),
     encoding="utf-8",
 )

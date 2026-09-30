@@ -28,7 +28,8 @@ META="$TMP_DIR/note-meta.json"
 # recording: は [a.m4a, b.m4a] のリスト形式もあるので先頭だけ使う
 RECORDING="$(grep -m1 '^recording:' "$NOTE" | grep -o '[^][ ,]*\.m4a' | head -1)"
 [[ -n "$RECORDING" ]] || fail "frontmatter に recording がありません"
-sed -n '/^## 文字起こし$/,$p' "$NOTE" | tail -n +3 > "$BODY"
+# 本文は折りたたみのコールアウトで囲まれている。囲む前の形式のノートもそのまま読む
+sed -n '/^## 文字起こし$/,$p' "$NOTE" | tail -n +3 | sed '/^> \[!quote\]/d; s/^> \{0,1\}//' > "$BODY"
 [[ -s "$BODY" ]] || fail "文字起こしが空です"
 
 build_codex_input "$BODY" "$RECORDING" "$TMP_DIR/codex-input.md"
