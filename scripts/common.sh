@@ -40,7 +40,6 @@ event_sidecar() {
   echo "$RECORDINGS_DIR/${1%.m4a}.event.json"
 }
 
-# 文字起こしの後にカレンダーの予定と過去ノートの候補を付けた codex 入力を作る
 build_codex_input() {
   local body="$1" recording="$2" out="$3" event
   event="$(event_sidecar "$recording")"
