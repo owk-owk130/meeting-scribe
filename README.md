@@ -124,6 +124,8 @@ open MeetingScribe.app
 | `transcribe-live.sh` | 録音中の raw PCM を定期的に文字起こしするウォッチャー |
 | `common.sh` | shell スクリプト共通の定義（ツールのパス、状態ファイル、通知、whisper / ffmpeg 呼び出し） |
 | `merge_transcript.py` | whisper の JSON 出力（自分/相手）を時刻順にマージ |
+| `build_note.py` | 文字起こし本文と codex の要約 JSON から Obsidian ノートを書く |
+| `note-schema.json` / `note-prompt.md` | codex に渡す要約の出力スキーマとプロンプト |
 | `models/` | whisper モデル |
 
 ## ライセンス

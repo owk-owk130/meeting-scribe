@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "会議内容が分かる簡潔な日本語タイトル。30文字以内" },
+    "tags": { "type": "array", "items": { "type": "string" }, "description": "内容を表すタグ 2〜4 個" },
+    "summary": { "type": "string", "description": "議論の概要。段落を分けた散文" },
+    "topics": { "type": "array", "items": { "type": "string" }, "description": "主な論点" },
+    "actions": { "type": "array", "items": { "type": "string" }, "description": "決定事項とアクションアイテム" }
+  },
+  "required": ["title", "tags", "summary", "topics", "actions"],
+  "additionalProperties": false
+}
