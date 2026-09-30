@@ -133,8 +133,8 @@ final class RecordingController {
     private let transcribingFileFile: String
     private let exitFile: String
     private let pausedFile: String
+    private let startedFile: String
 
-    private var startedAt: Date?
     private var liveWatcher: Process?
     private var transcriber: Process?
     private var transcribingPath: String?
@@ -154,15 +154,15 @@ final class RecordingController {
         transcribingFileFile = "\(stateDir)/transcribing.file"
         exitFile = "\(stateDir)/recording.exit"
         pausedFile = "\(stateDir)/recording.paused"
+        startedFile = "\(stateDir)/recording.started"
         try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
     }
 
     func sync() -> RecordingStatus {
         if let pid = readPID(pidFile) {
             if isAlive(pid, suffix: "/MeetingScribeRecorder") {
-                let started = startedAt ?? fileDate(pidFile) ?? Date()
-                startedAt = started
-                return .recording(startedAt: started, pausedAt: read(pausedFile).flatMap(Double.init).map(Date.init(timeIntervalSince1970:)))
+                let started = readDate(startedFile) ?? fileDate(pidFile) ?? Date()
+                return .recording(startedAt: started, pausedAt: readDate(pausedFile))
             }
             if let exit = read(exitFile).flatMap(Int32.init).flatMap(RecorderExit.init) {
                 finishRecording(reason: stopReason(exit))
@@ -214,7 +214,7 @@ final class RecordingController {
         }
         write("\(process.processIdentifier)", to: pidFile)
         write(outfile, to: outFile)
-        startedAt = Date()
+        writeDate(Date(), to: startedFile)
         let events = currentCalendarEvents()
         if !events.isEmpty, let json = try? JSONSerialization.data(withJSONObject: events) {
             try? json.write(to: URL(fileURLWithPath: eventSidecar(outfile)))
@@ -246,10 +246,10 @@ final class RecordingController {
         guard case .recording(let started, let pausedAt) = sync(), let pid = readPID(pidFile) else { return }
         kill(pid, SIGUSR1)
         if let pausedAt {
-            startedAt = started.addingTimeInterval(Date().timeIntervalSince(pausedAt))
+            writeDate(started.addingTimeInterval(Date().timeIntervalSince(pausedAt)), to: startedFile)
             remove(pausedFile)
         } else {
-            write("\(Date().timeIntervalSince1970)", to: pausedFile)
+            writeDate(Date(), to: pausedFile)
         }
     }
 
@@ -345,8 +345,7 @@ final class RecordingController {
     }
 
     private func clearRecordingState() {
-        startedAt = nil
-        remove(pidFile, outFile, exitFile, pausedFile)
+        remove(pidFile, outFile, exitFile, pausedFile, startedFile)
         stopLiveWatcher()
     }
 
@@ -386,6 +385,14 @@ final class RecordingController {
 
     private func readPID(_ path: String) -> pid_t? {
         read(path).flatMap { pid_t($0) }
+    }
+
+    private func readDate(_ path: String) -> Date? {
+        read(path).flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
+    }
+
+    private func writeDate(_ date: Date, to path: String) {
+        write("\(date.timeIntervalSince1970)", to: path)
     }
 
     private func read(_ path: String) -> String? {

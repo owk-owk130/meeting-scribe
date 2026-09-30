@@ -82,7 +82,7 @@ final class AutoStopMonitor {
     private let maxRecordSecs: TimeInterval
     private let silenceThresholdDB: Double
     private let onStop: (RecorderExit) -> Void
-    private let startedAt = Date()
+    private var startedAt = Date()
     private var lastSoundAt: Date
     private var lastLevelLogAt: Date
     private var levelMaxDB = -Double.infinity
@@ -119,8 +119,9 @@ final class AutoStopMonitor {
         }
     }
 
-    func resume() {
+    func resume(pausedFor: TimeInterval) {
         lastSoundAt = Date()
+        startedAt += pausedFor
     }
 
     private func requestStop(_ exit: RecorderExit, _ reason: String) {
@@ -235,7 +236,8 @@ startSilenceEngine()
 let ioQueue = DispatchQueue(label: "recorder.io")
 var ioProcID: AudioDeviceIOProcID?
 var writeFailed = false
-var paused = false
+var pausedAt: Date?
+var paused: Bool { pausedAt != nil }
 
 // 自動停止も SIGINT と同じ経路でファイナライズし、理由を RECORDER_EXIT_FILE に残してアプリに伝える
 var exitCode = RecorderExit.userStop
@@ -343,9 +345,14 @@ let sigtermSource = makeSignalHandler(SIGTERM)
 signal(SIGUSR1, SIG_IGN)
 let pauseSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: ioQueue)
 pauseSource.setEventHandler {
-    paused.toggle()
-    if !paused { autoStop.resume() }
-    log(paused ? "paused" : "resumed")
+    if let since = pausedAt {
+        pausedAt = nil
+        autoStop.resume(pausedFor: Date().timeIntervalSince(since))
+        log("resumed")
+    } else {
+        pausedAt = Date()
+        log("paused")
+    }
 }
 pauseSource.resume()
 
