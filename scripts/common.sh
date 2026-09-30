@@ -15,9 +15,13 @@ notify() {
 }
 
 # VAD（音声区間検出）を必ず通す。無音・環境ノイズだけの区間は whisper が幻聴を出すため
+# whisper は -np でも GPU の初期化ログを大量に出すので、失敗したときだけ record.log に残す
 run_whisper() {
+  local err="$2.whisper.log"
   "$WHISPER_BIN" -m "$MODEL" -l "$WHISPER_LANG" -f "$1" "$3" -of "$2" -np \
-    --vad --vad-model "$VAD_MODEL" >/dev/null 2>>"$LOG_FILE"
+    --vad --vad-model "$VAD_MODEL" >/dev/null 2>"$err" && return 0
+  cat "$err" >>"$LOG_FILE"
+  return 1
 }
 
 # codex は stdin をログにエコーするため、成功時は record.log に残さない（肥大するので）
@@ -55,7 +59,7 @@ build_codex_input() {
 }
 
 run_ffmpeg() {
-  "$FFMPEG_BIN" -hide_banner -y "$@" 2>>"$LOG_FILE"
+  "$FFMPEG_BIN" -hide_banner -loglevel error -y "$@" 2>>"$LOG_FILE"
 }
 
 split_stereo() {

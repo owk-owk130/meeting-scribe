@@ -184,7 +184,7 @@ final class LiveTranscriber {
 
         let selfWav = "\(tmpDir)/self.wav", othersWav = "\(tmpDir)/others.wav"
         let split = [
-            "-hide_banner", "-y", "-f", "f32le", "-ar", "\(rate)", "-ac", "2", "-i", "pipe:0",
+            "-hide_banner", "-loglevel", "error", "-y", "-f", "f32le", "-ar", "\(rate)", "-ac", "2", "-i", "pipe:0",
             "-filter_complex", "[0:a]channelsplit=channel_layout=stereo[l][r]",
             "-map", "[l]", "-ac", "1", "-ar", "16000", selfWav,
             "-map", "[r]", "-ac", "1", "-ar", "16000", othersWav,
@@ -198,10 +198,13 @@ final class LiveTranscriber {
             launch(config.whisperBin, [
                 "-m", config.model, "-l", config.language, "-f", wav, "-oj", "-of", "\(tmpDir)/\(name)", "-np",
                 "--vad", "--vad-model", config.vadModel,
-            ])
+            ], stderrPath: "\(tmpDir)/\(name).log")
         }
         let succeeded = whispers.map { $0.map(wait) == true }
-        guard !succeeded.contains(false) else { return }
+        guard !succeeded.contains(false) else {
+            logWhisperFailure()
+            return
+        }
 
         let output = Pipe()
         let merge = [config.mergeScript, "\(tmpDir)/self.json", "\(tmpDir)/others.json",
@@ -214,6 +217,18 @@ final class LiveTranscriber {
         try? transcript.write(contentsOf: text)
     }
 
+    // whisper は -np でも GPU の初期化ログを大量に出すので、失敗したときだけ record.log に残す
+    private func logWhisperFailure() {
+        lock.lock()
+        let wasStopped = stopped
+        lock.unlock()
+        guard !wasStopped else { return }
+        let log = logHandle()
+        for name in ["self", "others"] {
+            if let data = FileManager.default.contents(atPath: "\(tmpDir)/\(name).log") { log.write(data) }
+        }
+    }
+
     private func run(_ executable: String, _ arguments: [String], stdin data: Data) -> Bool {
         let input = Pipe()
         guard let process = launch(executable, arguments, stdin: input) else { return false }
@@ -222,7 +237,8 @@ final class LiveTranscriber {
         return wait(process)
     }
 
-    private func launch(_ executable: String, _ arguments: [String], stdin: Pipe? = nil, stdout: Pipe? = nil) -> Process? {
+    private func launch(_ executable: String, _ arguments: [String], stdin: Pipe? = nil, stdout: Pipe? = nil,
+                        stderrPath: String? = nil) -> Process? {
         lock.lock()
         defer { lock.unlock() }
         guard !stopped else { return nil }
@@ -231,7 +247,12 @@ final class LiveTranscriber {
         process.arguments = arguments
         process.standardInput = stdin ?? FileHandle.nullDevice
         process.standardOutput = stdout ?? FileHandle.nullDevice
-        process.standardError = logHandle()
+        if let stderrPath, FileManager.default.createFile(atPath: stderrPath, contents: nil),
+           let handle = FileHandle(forWritingAtPath: stderrPath) {
+            process.standardError = handle
+        } else {
+            process.standardError = logHandle()
+        }
         guard (try? process.run()) != nil else { return nil }
         running.append(process)
         return process
