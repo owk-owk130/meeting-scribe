@@ -24,6 +24,10 @@ def one_line(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
+def filename_safe(title):
+    return one_line(re.sub(r'[/:*?"<>|\\]', "", title))
+
+
 def sections_markdown(meta, notes_dir):
     related = [f"[[{name}]]" for name in meta["related_notes"] if (notes_dir / f"{name}.md").exists()]
     lines = ["## 要約", "", meta["summary"].strip()]
@@ -89,8 +93,7 @@ body = Path(args.body).read_text(encoding="utf-8")
 
 meta = load_meta(args.meta)
 if meta:
-    # タイトルはファイル名に使うのでパス区切りを落とし、改行は空白にする
-    meta_title = one_line(re.sub(r'[/:*?"<>|\\]', "", meta["title"]))
+    meta_title = filename_safe(meta["title"])
     if meta_title:
         title = meta_title
     # タグは frontmatter の [a, b] 形式に入れるので区切りと衝突する文字を落とす
@@ -101,6 +104,9 @@ if meta:
 event = load_event(args.event) if args.event else None
 event_lines = []
 if event:
+    event_title = filename_safe(event["title"])
+    if event_title:
+        title = event_title
     event_lines.append(f"event: {one_line(event['title'])}")
     attendees = [one_line(re.sub(r"[,\[\]]", "", a)) for a in event["attendees"]]
     event_lines.append(f"attendees: [{','.join(a for a in attendees if a)}]")

@@ -73,8 +73,8 @@ open MeetingScribe.app
 
 ### ノートの形式
 
-ファイル名は `YYYY-MM-DD-HHMMSS <タイトル>.md` で、日時は録音開始時刻。frontmatter に date / recording / title / tags
-（カレンダーの予定があれば event / attendees も）、
+ファイル名は `YYYY-MM-DD-HHMMSS <タイトル>.md` で、日時は録音開始時刻。タイトルはカレンダーの予定があれば予定名、
+無ければ codex が内容から付ける。frontmatter に date / recording / title / tags（予定があれば event / attendees も）、
 本文に「要約」（議論の概要）「主な論点」「決定事項とアクション」「文字起こし」が入る。
 論点・決定事項が無い会議では該当セクションを省く。
 codex が文脈から誤認識と判断した固有名詞・専門用語は文字起こし本文でも訂正する。
