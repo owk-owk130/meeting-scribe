@@ -50,18 +50,21 @@ struct Config {
     let silenceStopMins: String
     let silenceThresholdDB: String
     let maxRecordMins: String
+    let recordingsKeepDays: Int
 }
 
 func loadConfig() -> Config? {
     let result = runShell("/bin/bash", [
         "-c",
         "source \"\(scriptDir)/config.sh\" && printf '%s\\n' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\" "
-            + "\"${LIVE_TRANSCRIBE:-1}\" \"${SILENCE_STOP_MINS:-0}\" \"${SILENCE_THRESHOLD_DB:-}\" \"${MAX_RECORD_MINS:-0}\"",
+            + "\"${LIVE_TRANSCRIBE:-1}\" \"${SILENCE_STOP_MINS:-0}\" \"${SILENCE_THRESHOLD_DB:-}\" \"${MAX_RECORD_MINS:-0}\" "
+            + "\"${RECORDINGS_KEEP_DAYS:-0}\"",
     ])
     let lines = result.stdout.components(separatedBy: "\n")
-    guard result.exitCode == 0, lines.count == 6, !lines[0].isEmpty, !lines[1].isEmpty else { return nil }
+    guard result.exitCode == 0, lines.count == 7, !lines[0].isEmpty, !lines[1].isEmpty else { return nil }
     return Config(recordingsDir: lines[0], vaultMeetingsDir: lines[1], liveTranscribe: lines[2] != "0",
-                  silenceStopMins: lines[3], silenceThresholdDB: lines[4], maxRecordMins: lines[5])
+                  silenceStopMins: lines[3], silenceThresholdDB: lines[4], maxRecordMins: lines[5],
+                  recordingsKeepDays: Int(lines[6]) ?? 0)
 }
 
 enum RecordingStatus {
@@ -148,6 +151,7 @@ final class RecordingController {
         try? FileManager.default.createDirectory(atPath: config.recordingsDir, withIntermediateDirectories: true)
         clearRecordingState()
         rotateLogIfLarge()
+        deleteExpiredRecordings()
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -215,9 +219,20 @@ final class RecordingController {
     }
 
     func pending() -> [String] {
-        let fm = FileManager.default
+        var known = notedRecordings()
+        if let current = read(outFile) { known.insert(URL(fileURLWithPath: current).lastPathComponent) }
+        if let current = transcribingFile { known.insert(URL(fileURLWithPath: current).lastPathComponent) }
+        return recordings().filter { !known.contains($0) }.sorted(by: >).map { "\(config.recordingsDir)/\($0)" }
+    }
+
+    private func recordings() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: config.recordingsDir)) ?? [])
+            .filter { $0.hasSuffix(".m4a") && !$0.hasPrefix(".") }
+    }
+
+    private func notedRecordings() -> Set<String> {
         var known = Set<String>()
-        for note in (try? fm.contentsOfDirectory(atPath: config.vaultMeetingsDir)) ?? []
+        for note in (try? FileManager.default.contentsOfDirectory(atPath: config.vaultMeetingsDir)) ?? []
         where note.hasSuffix(".md") && !note.hasPrefix(".") {
             guard let text = try? String(contentsOfFile: "\(config.vaultMeetingsDir)/\(note)", encoding: .utf8) else { continue }
             for line in text.split(separator: "\n") where line.hasPrefix("recording:") {
@@ -227,12 +242,18 @@ final class RecordingController {
                 }
             }
         }
-        if let current = read(outFile) { known.insert(URL(fileURLWithPath: current).lastPathComponent) }
-        if let current = transcribingFile { known.insert(URL(fileURLWithPath: current).lastPathComponent) }
-        return ((try? fm.contentsOfDirectory(atPath: config.recordingsDir)) ?? [])
-            .filter { $0.hasSuffix(".m4a") && !$0.hasPrefix(".") && !known.contains($0) }
-            .sorted(by: >)
-            .map { "\(config.recordingsDir)/\($0)" }
+        return known
+    }
+
+    // ノートになっていない録音は「未完了の文字起こし」から再実行できるよう残す
+    private func deleteExpiredRecordings() {
+        guard config.recordingsKeepDays > 0 else { return }
+        let cutoff = Date().addingTimeInterval(-Double(config.recordingsKeepDays) * 86_400)
+        let noted = notedRecordings()
+        for name in recordings() where noted.contains(name) {
+            let path = "\(config.recordingsDir)/\(name)"
+            if let date = fileDate(path), date < cutoff { remove(path) }
+        }
     }
 
     private func rotateLogIfLarge() {
