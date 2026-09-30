@@ -8,6 +8,7 @@ let liveTranscriptFile = "\(stateDir)/live-transcript.md"
 
 let idleIcon = "🎙"
 let recordingIcon = "🔴"
+let pausedIcon = "⏸"
 let recentNotesCount = 5
 let logRotateBytes = 10 * 1024 * 1024
 
@@ -70,7 +71,7 @@ func loadConfig() -> Config? {
 
 enum RecordingStatus {
     case idle
-    case recording(startedAt: Date)
+    case recording(startedAt: Date, pausedAt: Date?)
     case transcribing
 }
 
@@ -108,6 +109,7 @@ final class RecordingController {
     private let transcribingPIDFile: String
     private let transcribingFileFile: String
     private let exitFile: String
+    private let pausedFile: String
 
     private var startedAt: Date?
     private var liveWatcher: Process?
@@ -128,6 +130,7 @@ final class RecordingController {
         transcribingPIDFile = "\(stateDir)/transcribing.pid"
         transcribingFileFile = "\(stateDir)/transcribing.file"
         exitFile = "\(stateDir)/recording.exit"
+        pausedFile = "\(stateDir)/recording.paused"
         try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
     }
 
@@ -136,7 +139,7 @@ final class RecordingController {
             if isAlive(pid, suffix: "/MeetingScribeRecorder") {
                 let started = startedAt ?? fileDate(pidFile) ?? Date()
                 startedAt = started
-                return .recording(startedAt: started)
+                return .recording(startedAt: started, pausedAt: read(pausedFile).flatMap(Double.init).map(Date.init(timeIntervalSince1970:)))
             }
             if let exit = read(exitFile).flatMap(Int32.init).flatMap(RecorderExit.init) {
                 finishRecording(reason: stopReason(exit))
@@ -209,6 +212,18 @@ final class RecordingController {
         }
         if isAlive(pid, suffix: "/MeetingScribeRecorder") { kill(pid, SIGKILL) }
         finishRecording(reason: stopReason(.userStop))
+    }
+
+    // 停止中の時間は経過時間に含めないよう、再開時に開始時刻をずらす
+    func togglePause() {
+        guard case .recording(let started, let pausedAt) = sync(), let pid = readPID(pidFile) else { return }
+        kill(pid, SIGUSR1)
+        if let pausedAt {
+            startedAt = started.addingTimeInterval(Date().timeIntervalSince(pausedAt))
+            remove(pausedFile)
+        } else {
+            write("\(Date().timeIntervalSince1970)", to: pausedFile)
+        }
     }
 
     func transcribe(_ path: String) throws {
@@ -304,7 +319,7 @@ final class RecordingController {
 
     private func clearRecordingState() {
         startedAt = nil
-        remove(pidFile, outFile, exitFile)
+        remove(pidFile, outFile, exitFile, pausedFile)
         stopLiveWatcher()
     }
 
@@ -477,6 +492,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let pendingMenu = NSMenu()
 
     private var recordingStartDate: Date?
+    private var recordingPausedAt: Date?
     private var isRecording: Bool { recordingStartDate != nil }
     private var isTranscribing = false
     private var elapsedTimer: Timer?
@@ -486,6 +502,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private let transcribingItem = NSMenuItem(title: "文字起こし中…", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "録音開始", action: #selector(toggleRecording), keyEquivalent: "r")
+    private let pauseItem = NSMenuItem(title: "一時停止", action: #selector(togglePause), keyEquivalent: "p")
     private let liveItem = NSMenuItem(title: "ライブ文字起こしを表示", action: #selector(toggleLivePanel), keyEquivalent: "l")
 
     private let livePanel = LiveTranscriptPanel()
@@ -523,6 +540,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         toggleItem.target = self
         toggleItem.isEnabled = scriptAvailable
         menu.addItem(toggleItem)
+
+        pauseItem.target = self
+        pauseItem.isHidden = true
+        menu.addItem(pauseItem)
 
         liveItem.target = self
         liveItem.isEnabled = scriptAvailable
@@ -671,13 +692,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func applyStatus(_ status: RecordingStatus) {
         var startedAt: Date?
+        recordingPausedAt = nil
         isTranscribing = false
         switch status {
-        case .recording(let date): startedAt = date
+        case .recording(let date, let pausedAt):
+            startedAt = date
+            recordingPausedAt = pausedAt
         case .transcribing: isTranscribing = true
         case .idle: break
         }
+        pauseItem.title = recordingPausedAt == nil ? "一時停止" : "再開"
+        if let startedAt, isRecording { recordingStartDate = startedAt }
         guard (startedAt != nil) != isRecording else { return }
+        pauseItem.isHidden = startedAt == nil
         if let startedAt {
             recordingStartDate = startedAt
             toggleItem.title = "録音停止"
@@ -709,8 +736,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateElapsedTitle() {
         guard let start = recordingStartDate else { return }
-        let elapsed = Int(Date().timeIntervalSince(start))
-        statusItem.button?.title = String(format: "%@ %02d:%02d", recordingIcon, elapsed / 60, elapsed % 60)
+        let elapsed = Int((recordingPausedAt ?? Date()).timeIntervalSince(start))
+        let icon = recordingPausedAt == nil ? recordingIcon : pausedIcon
+        statusItem.button?.title = String(format: "%@ %02d:%02d", icon, elapsed / 60, elapsed % 60)
+    }
+
+    @objc private func togglePause() {
+        syncState({ $0.togglePause() })
     }
 
     @objc private func toggleRecording() {

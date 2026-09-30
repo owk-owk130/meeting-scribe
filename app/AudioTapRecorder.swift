@@ -119,6 +119,10 @@ final class AutoStopMonitor {
         }
     }
 
+    func resume() {
+        lastSoundAt = Date()
+    }
+
     private func requestStop(_ exit: RecorderExit, _ reason: String) {
         guard !stopRequested else { return }
         stopRequested = true
@@ -231,6 +235,7 @@ startSilenceEngine()
 let ioQueue = DispatchQueue(label: "recorder.io")
 var ioProcID: AudioDeviceIOProcID?
 var writeFailed = false
+var paused = false
 
 // 自動停止も SIGINT と同じ経路でファイナライズし、理由を RECORDER_EXIT_FILE に残してアプリに伝える
 var exitCode = RecorderExit.userStop
@@ -244,6 +249,7 @@ let autoStop = AutoStopMonitor(
     kill(getpid(), SIGINT)
 }
 check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, inputData, _, _, _ in
+    guard !paused else { return }
     // 各バッファ内はインターリーブの可能性があるため (データ位置, ストライド) で全チャンネルを平坦化する。
     // システム音声が鳴っていないときタップのバッファは 0 フレームになるので、
     // フレーム数はバッファごとに持ち、足りない分は無音（0）として扱う
@@ -332,5 +338,15 @@ func makeSignalHandler(_ sig: Int32) -> DispatchSourceSignal {
 }
 let sigintSource = makeSignalHandler(SIGINT)
 let sigtermSource = makeSignalHandler(SIGTERM)
+
+// 一時停止中はどのファイルにも書かないので、ライブと最終の文字起こしの時刻は揃ったまま
+signal(SIGUSR1, SIG_IGN)
+let pauseSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: ioQueue)
+pauseSource.setEventHandler {
+    paused.toggle()
+    if !paused { autoStop.resume() }
+    log(paused ? "paused" : "resumed")
+}
+pauseSource.resume()
 
 dispatchMain()
