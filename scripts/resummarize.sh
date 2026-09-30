@@ -34,12 +34,12 @@ sed -n '/^## 文字起こし$/,$p' "$NOTE" | tail -n +3 > "$BODY"
 build_codex_input "$BODY" "$RECORDING" "$TMP_DIR/codex-input.md"
 generate_meta "$TMP_DIR/codex-input.md" "$META" || fail "codex が要約を返しませんでした"
 
+# 元ノートを退避してから書き、失敗したら戻す。同名ノートとの衝突は build_note.py が Vault 内で避ける
+mv "$NOTE" "$TMP_DIR/original.md"
 NEW="$(/usr/bin/python3 "$SCRIPT_DIR/build_note.py" \
-  --body "$BODY" --recording "$RECORDING" --out-dir "$TMP_DIR" --notes-dir "$NOTE_DIR" --meta "$META" \
+  --body "$BODY" --recording "$RECORDING" --out-dir "$NOTE_DIR" --meta "$META" \
   --event "$(event_sidecar "$RECORDING")")" \
-  || fail "ノートの作成に失敗しました"
+  || { mv "$TMP_DIR/original.md" "$NOTE"; fail "ノートの作成に失敗しました"; }
 
-rm -f "$NOTE"
-mv "$NEW" "$NOTE_DIR/"
 notify "要約を再生成しました: $(basename "$NEW")"
-echo "note: $NOTE_DIR/$(basename "$NEW")"
+echo "note: $NEW"

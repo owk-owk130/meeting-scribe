@@ -79,7 +79,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--body", required=True)
 parser.add_argument("--recording", required=True)
 parser.add_argument("--out-dir", required=True)
-parser.add_argument("--notes-dir")
 parser.add_argument("--event")
 parser.add_argument("--meta", required=True)
 args = parser.parse_args()
@@ -98,7 +97,7 @@ if meta:
         title = meta_title
     # タグは frontmatter の [a, b] 形式に入れるので区切りと衝突する文字を落とす
     tags += [t for t in (one_line(re.sub(r"[,\[\]]", "", tag)) for tag in meta["tags"]) if t]
-    sections = sections_markdown(meta, Path(args.notes_dir or args.out_dir))
+    sections = sections_markdown(meta, Path(args.out_dir))
     body = apply_corrections(body, meta["corrections"])
 
 event = load_event(args.event) if args.event else None
