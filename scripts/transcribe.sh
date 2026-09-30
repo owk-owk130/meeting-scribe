@@ -31,23 +31,6 @@ BASENAME="$(basename "$AUDIO")"
 BODY="$TMP_DIR/body.md"
 META="$TMP_DIR/note-meta.json"
 
-generate_meta() {
-  [[ -x "${CODEX_BIN:-}" ]] || return 1
-
-  # codex は stdin をログにエコーするため、成功時は record.log に残さない（肥大するので）
-  local codex_log="$TMP_DIR/codex.log" attempt
-  for attempt in 1 2; do
-    # Vault は git リポジトリではないので --skip-git-repo-check は必須
-    "$CODEX_BIN" exec -s read-only --skip-git-repo-check \
-      --output-schema "$SCRIPT_DIR/note-schema.json" -o "$META" \
-      "$(cat "$SCRIPT_DIR/note-prompt.md")" \
-      < "$BODY" >"$codex_log" 2>&1 && [[ -s "$META" ]] && return 0
-    echo "warn: 要約の生成に失敗しました (attempt $attempt)" >&2
-    cat "$codex_log" >>"$LOG_FILE"
-  done
-  return 1
-}
-
 CHANNELS="$("$FFPROBE_BIN" -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 "$AUDIO")"
 
 if [[ "$CHANNELS" == "2" ]]; then
@@ -72,7 +55,7 @@ if [[ ! -s "$BODY" ]]; then
   exit 0
 fi
 
-generate_meta
+generate_meta "$BODY" "$META"
 
 NOTE="$(/usr/bin/python3 "$SCRIPT_DIR/build_note.py" \
   --body "$BODY" --recording "$BASENAME" --out-dir "$VAULT_MEETINGS_DIR" --meta "$META")" \

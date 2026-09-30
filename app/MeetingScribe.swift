@@ -98,6 +98,7 @@ final class RecordingController {
     private let config: Config
     private let recorderBin: String
     private let transcribeScript: String
+    private let resummarizeScript: String
     private let liveScript: String
     private let logFile: String
     private let pidFile: String
@@ -117,6 +118,7 @@ final class RecordingController {
         self.config = config
         recorderBin = "\(Bundle.main.bundlePath)/Contents/MacOS/MeetingScribeRecorder"
         transcribeScript = "\(rootDir)/scripts/transcribe.sh"
+        resummarizeScript = "\(rootDir)/scripts/resummarize.sh"
         liveScript = "\(rootDir)/scripts/transcribe-live.sh"
         logFile = "\(stateDir)/record.log"
         pidFile = "\(stateDir)/recording.pid"
@@ -218,6 +220,15 @@ final class RecordingController {
         }
         try launchTranscriber(path)
         notify("文字起こしを開始しました: \(URL(fileURLWithPath: path).lastPathComponent)")
+    }
+
+    func resummarize(_ note: String) throws {
+        if isTranscribing {
+            throw ControlError(message: "文字起こし中です: \(transcribingFile ?? "")")
+        }
+        transcriber = try launch(script: resummarizeScript, arguments: [note])
+        transcribingPath = note
+        notify("要約を再生成しています: \(URL(fileURLWithPath: note).lastPathComponent)")
     }
 
     func pending() -> [String] {
@@ -461,6 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
     private let recentNotesMenu = NSMenu()
+    private let resummarizeMenu = NSMenu()
     private let pendingItem = NSMenuItem(title: "未完了の文字起こし", action: nil, keyEquivalent: "")
     private let pendingMenu = NSMenu()
 
@@ -519,8 +531,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let recentItem = NSMenuItem(title: "最近のノート", action: nil, keyEquivalent: "")
         recentItem.submenu = recentNotesMenu
-        setRecentNotesPlaceholder("ノートがありません")
         menu.addItem(recentItem)
+
+        let resummarizeItem = NSMenuItem(title: "要約をやり直す", action: nil, keyEquivalent: "")
+        resummarizeItem.submenu = resummarizeMenu
+        resummarizeMenu.autoenablesItems = false
+        menu.addItem(resummarizeItem)
+        setRecentNotesPlaceholder("ノートがありません")
 
         pendingItem.submenu = pendingMenu
         pendingItem.isHidden = true
@@ -575,11 +592,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc private func resummarizeNote(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        syncState({ try $0.resummarize(path) }) { [weak self] error in
+            if let error { self?.showAlert("要約の再生成を開始できませんでした", detail: error.message) }
+        }
+    }
+
     private func setRecentNotesPlaceholder(_ title: String) {
-        recentNotesMenu.removeAllItems()
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        recentNotesMenu.addItem(item)
+        for submenu in [recentNotesMenu, resummarizeMenu] {
+            submenu.removeAllItems()
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            submenu.addItem(item)
+        }
     }
 
     private func rebuildRecentNotesAsync() {
@@ -608,12 +634,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return
                 }
                 self.recentNotesMenu.removeAllItems()
+                self.resummarizeMenu.removeAllItems()
                 for note in notes {
-                    let item = NSMenuItem(title: note.deletingPathExtension().lastPathComponent,
-                                          action: #selector(self.openNote(_:)), keyEquivalent: "")
-                    item.target = self
-                    item.representedObject = note.path
-                    self.recentNotesMenu.addItem(item)
+                    let title = note.deletingPathExtension().lastPathComponent
+                    let open = NSMenuItem(title: title, action: #selector(self.openNote(_:)), keyEquivalent: "")
+                    open.target = self
+                    open.representedObject = note.path
+                    self.recentNotesMenu.addItem(open)
+                    let redo = NSMenuItem(title: title, action: #selector(self.resummarizeNote(_:)), keyEquivalent: "")
+                    redo.target = self
+                    redo.representedObject = note.path
+                    redo.isEnabled = !self.isTranscribing && !self.isRecording
+                    self.resummarizeMenu.addItem(redo)
                 }
             }
         }

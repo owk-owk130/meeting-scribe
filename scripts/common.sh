@@ -20,6 +20,22 @@ run_whisper() {
     --vad --vad-model "$VAD_MODEL" >/dev/null 2>>"$LOG_FILE"
 }
 
+# codex は stdin をログにエコーするため、成功時は record.log に残さない（肥大するので）
+# Vault は git リポジトリではないので --skip-git-repo-check は必須
+generate_meta() {
+  local body="$1" meta="$2" codex_log="$TMP_DIR/codex.log" attempt
+  [[ -x "${CODEX_BIN:-}" ]] || return 1
+  for attempt in 1 2; do
+    "$CODEX_BIN" exec -s read-only --skip-git-repo-check \
+      --output-schema "$SCRIPT_DIR/note-schema.json" -o "$meta" \
+      "$(cat "$SCRIPT_DIR/note-prompt.md")" \
+      < "$body" >"$codex_log" 2>&1 && [[ -s "$meta" ]] && return 0
+    echo "warn: 要約の生成に失敗しました (attempt $attempt)" >&2
+    cat "$codex_log" >>"$LOG_FILE"
+  done
+  return 1
+}
+
 run_ffmpeg() {
   "$FFMPEG_BIN" -hide_banner -y "$@" 2>>"$LOG_FILE"
 }

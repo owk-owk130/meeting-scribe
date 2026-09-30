@@ -52,6 +52,8 @@ open MeetingScribe.app
 - 進行状況は通知で知らせる
 - 文字起こしが失敗・中断した録音は「未完了の文字起こし」に出る。選ぶと文字起こしをやり直す
   （ノートの frontmatter `recording:` に現れない録音を未完了とみなす。要らない録音は録音フォルダから消す）
+- 「要約をやり直す」で直近 5 件のノートの要約・タイトル・タグを codex で作り直せる。文字起こしはそのまま使い、
+  タイトルが変わればファイル名も変わる。要約の生成に失敗して `会議メモ` になったノートの復旧に使う
 
 ### ライブ文字起こし
 
@@ -124,6 +126,7 @@ open MeetingScribe.app
 | `build.sh` | ビルド + `.app` バンドル生成。recorder もバンドル内に置く |
 | `config.sh` | 共有設定（保存先パス、codex のパス、自動停止） |
 | `scripts/transcribe.sh` | 文字起こし、要約・タイトル・タグ生成、ノート生成 |
+| `scripts/resummarize.sh` | 既存ノートの文字起こしから要約・タイトル・タグを作り直す |
 | `scripts/transcribe-live.sh` | 録音中の raw PCM を定期的に文字起こしするウォッチャー |
 | `scripts/common.sh` | shell スクリプト共通の定義（ツールのパス、状態ファイル、通知、whisper / ffmpeg 呼び出し） |
 | `scripts/merge_transcript.py` | whisper の JSON 出力（自分/相手）を時刻順にマージ |
