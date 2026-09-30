@@ -189,7 +189,6 @@ do {
     fail("出力ファイルを作成できません: \(error.localizedDescription)")
 }
 
-// ライブ用 PCM を開けなくても録音は続ける
 var liveHandle: FileHandle?
 if let livePCMPath {
     FileManager.default.createFile(atPath: livePCMPath, contents: nil)

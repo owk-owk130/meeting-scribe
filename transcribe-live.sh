@@ -6,7 +6,10 @@ source "$SCRIPT_DIR/config.sh"
 source "$SCRIPT_DIR/common.sh"
 
 INTERVAL="${LIVE_INTERVAL_SECS:-30}"
-BYTES_PER_FRAME=8   # 2ch × float32
+CHANNELS=2
+BYTES_PER_SAMPLE=4
+BYTES_PER_FRAME=$(( CHANNELS * BYTES_PER_SAMPLE ))
+MIN_CHUNK_SECS=2
 
 PCM="${1:-}"
 TRANSCRIPT="${2:-}"
@@ -36,17 +39,16 @@ OFFSET=0
 while sleep "$INTERVAL"; do
   [[ -f "$PCM" ]] || break
   SIZE="$(stat -f %z "$PCM" 2>/dev/null)" || break
-  SIZE=$(( SIZE / BYTES_PER_FRAME * BYTES_PER_FRAME ))   # フレーム境界に丸める
+  SIZE=$(( SIZE / BYTES_PER_FRAME * BYTES_PER_FRAME ))
   CHUNK=$(( SIZE - OFFSET ))
-  (( CHUNK >= RATE * BYTES_PER_FRAME * 2 )) || continue  # 2 秒未満なら次の間隔まで待つ
+  (( CHUNK >= RATE * BYTES_PER_FRAME * MIN_CHUNK_SECS )) || continue
 
   tail -c "+$((OFFSET + 1))" "$PCM" | head -c "$CHUNK" \
-    | split_stereo "$TMP_DIR" -f f32le -ar "$RATE" -ac 2 -i pipe:0 || continue
+    | split_stereo "$TMP_DIR" -f f32le -ar "$RATE" -ac "$CHANNELS" -i pipe:0 || continue
 
   OFFSET_MS=$(( OFFSET / BYTES_PER_FRAME * 1000 / RATE ))
   OFFSET=$(( OFFSET + CHUNK ))
 
-  # 自分/相手は独立なので並列にかけ、窓あたりの遅延を抑える
   run_whisper "$TMP_DIR/self.wav" "$TMP_DIR/self" -oj & SELF_PID=$!
   run_whisper "$TMP_DIR/others.wav" "$TMP_DIR/others" -oj & OTHERS_PID=$!
   wait "$SELF_PID"; SELF_RC=$?

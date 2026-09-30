@@ -335,7 +335,6 @@ final class LiveTranscriptPanel {
     private var timer: Timer?
     private var content: String?
 
-    // ユーザーが自分で閉じたら、以降の録音開始で自動表示しない（開き直せば元に戻る）
     private(set) var userHidden: Bool {
         get { UserDefaults.standard.bool(forKey: "LivePanelUserHidden") }
         set { UserDefaults.standard.set(newValue, forKey: "LivePanelUserHidden") }
@@ -466,7 +465,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         controller.onRecorderExit = { [weak self] in self?.syncState() }
-        // アプリ再起動時に録音が生きているケースがあるので実状態と同期する
         syncState()
         pollTimer = makeRepeatingTimer(5) { [weak self] in self?.syncState() }
     }
