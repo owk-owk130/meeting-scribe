@@ -5,16 +5,16 @@
 テスト基盤はない。変更したら以下を通す。
 
 ```sh
-bash -n transcribe.sh transcribe-live.sh common.sh build.sh config.sh config.example.sh
-swiftc -O MeetingScribe.swift -o /tmp/check        # 稼働中の .app を壊さないよう出力先を分ける
-swiftc -O AudioTapRecorder.swift -o /tmp/check-recorder
-./transcribe.sh ~/MeetingRecordings/<file>.m4a     # パイプライン全体（whisper + codex で数分）
+bash -n scripts/*.sh build.sh config.sh config.example.sh
+swiftc -O app/MeetingScribe.swift -o /tmp/check          # 稼働中の .app を壊さないよう出力先を分ける
+swiftc -O app/AudioTapRecorder.swift -o /tmp/check-recorder
+scripts/transcribe.sh ~/MeetingRecordings/<file>.m4a    # パイプライン全体（whisper + codex で数分）
 ```
 
 ## 実行環境
 
-recorder と `transcribe.sh` / `transcribe-live.sh` はアプリが `Process` で起動するため **PATH が最小**になる。
-外部コマンドは絶対パスで呼ぶ。既定パスは `common.sh` に置いて `config.sh` で上書きできるようにする（`WHISPER_BIN`）か、`config.sh` だけに持たせる（`CODEX_BIN`）。
+recorder と `scripts/transcribe.sh` / `scripts/transcribe-live.sh` はアプリが `Process` で起動するため **PATH が最小**になる。
+外部コマンドは絶対パスで呼ぶ。既定パスは `scripts/common.sh` に置いて `config.sh` で上書きできるようにする（`WHISPER_BIN`）か、`config.sh` だけに持たせる（`CODEX_BIN`）。
 
 ## 設定
 

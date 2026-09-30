@@ -1,12 +1,14 @@
 : "${WHISPER_BIN:=/opt/homebrew/bin/whisper-cli}"
 : "${FFMPEG_BIN:=/opt/homebrew/bin/ffmpeg}"
 : "${FFPROBE_BIN:=/opt/homebrew/bin/ffprobe}"
-MODEL="$SCRIPT_DIR/models/ggml-large-v3-turbo.bin"
-VAD_MODEL="$SCRIPT_DIR/models/ggml-silero-v5.1.2.bin"
+MODEL="$ROOT_DIR/models/ggml-large-v3-turbo.bin"
+VAD_MODEL="$ROOT_DIR/models/ggml-silero-v5.1.2.bin"
 WHISPER_LANG="ja"
-LOG_FILE="$SCRIPT_DIR/record.log"
-TRANSCRIBING_PID_FILE="$SCRIPT_DIR/.transcribing.pid"
-TRANSCRIBING_FILE_FILE="$SCRIPT_DIR/.transcribing.file"
+STATE_DIR="$ROOT_DIR/state"
+mkdir -p "$STATE_DIR"
+LOG_FILE="$STATE_DIR/record.log"
+TRANSCRIBING_PID_FILE="$STATE_DIR/transcribing.pid"
+TRANSCRIBING_FILE_FILE="$STATE_DIR/transcribing.file"
 
 notify() {
   osascript -e "display notification \"$1\" with title \"MeetingScribe\"" 2>/dev/null || true

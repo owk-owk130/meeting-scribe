@@ -1,9 +1,10 @@
 import AppKit
 import Foundation
 
-// .app は build.sh がプロジェクトディレクトリ内に生成するので、バンドルの親 = スクリプト群の場所
-let scriptDir = URL(fileURLWithPath: Bundle.main.bundlePath).deletingLastPathComponent().path
-let liveTranscriptFile = "\(scriptDir)/.live-transcript.md"
+// .app は build.sh がプロジェクトルートに生成するので、バンドルの親 = プロジェクトルート
+let rootDir = URL(fileURLWithPath: Bundle.main.bundlePath).deletingLastPathComponent().path
+let stateDir = "\(rootDir)/state"
+let liveTranscriptFile = "\(stateDir)/live-transcript.md"
 
 let idleIcon = "🎙"
 let recordingIcon = "🔴"
@@ -56,7 +57,7 @@ struct Config {
 func loadConfig() -> Config? {
     let result = runShell("/bin/bash", [
         "-c",
-        "source \"\(scriptDir)/config.sh\" && printf '%s\\n' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\" "
+        "source \"\(rootDir)/config.sh\" && printf '%s\\n' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\" "
             + "\"${LIVE_TRANSCRIBE:-1}\" \"${SILENCE_STOP_MINS:-0}\" \"${SILENCE_THRESHOLD_DB:-}\" \"${MAX_RECORD_MINS:-0}\" "
             + "\"${RECORDINGS_KEEP_DAYS:-0}\"",
     ])
@@ -112,19 +113,20 @@ final class RecordingController {
     private var transcriber: Process?
     private var transcribingPath: String?
 
-    init(scriptDir: String, config: Config) {
+    init(rootDir: String, config: Config) {
         self.config = config
-        recorderBin = "\(scriptDir)/MeetingScribeRecorder"
-        transcribeScript = "\(scriptDir)/transcribe.sh"
-        liveScript = "\(scriptDir)/transcribe-live.sh"
-        logFile = "\(scriptDir)/record.log"
-        pidFile = "\(scriptDir)/.recording.pid"
-        outFile = "\(scriptDir)/.recording.file"
-        livePCM = "\(scriptDir)/.live.pcm"
-        livePIDFile = "\(scriptDir)/.live.pid"
-        transcribingPIDFile = "\(scriptDir)/.transcribing.pid"
-        transcribingFileFile = "\(scriptDir)/.transcribing.file"
-        exitFile = "\(scriptDir)/.recording.exit"
+        recorderBin = "\(Bundle.main.bundlePath)/Contents/MacOS/MeetingScribeRecorder"
+        transcribeScript = "\(rootDir)/scripts/transcribe.sh"
+        liveScript = "\(rootDir)/scripts/transcribe-live.sh"
+        logFile = "\(stateDir)/record.log"
+        pidFile = "\(stateDir)/recording.pid"
+        outFile = "\(stateDir)/recording.file"
+        livePCM = "\(stateDir)/live.pcm"
+        livePIDFile = "\(stateDir)/live.pid"
+        transcribingPIDFile = "\(stateDir)/transcribing.pid"
+        transcribingFileFile = "\(stateDir)/transcribing.file"
+        exitFile = "\(stateDir)/recording.exit"
+        try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true)
     }
 
     func sync() -> RecordingStatus {
@@ -180,7 +182,7 @@ final class RecordingController {
         }
         sleep(1)
         guard process.isRunning else {
-            throw ControlError(message: "recorder が起動直後に終了しました。record.log を確認してください")
+            throw ControlError(message: "recorder が起動直後に終了しました。state/record.log を確認してください")
         }
         write("\(process.processIdentifier)", to: pidFile)
         write(outfile, to: outFile)
@@ -467,7 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var isTranscribing = false
     private var elapsedTimer: Timer?
     private var pollTimer: Timer?
-    private let controller = config.map { RecordingController(scriptDir: scriptDir, config: $0) }
+    private let controller = config.map { RecordingController(rootDir: rootDir, config: $0) }
     private var scriptAvailable: Bool { controller != nil }
 
     private let transcribingItem = NSMenuItem(title: "文字起こし中…", action: nil, keyEquivalent: "")
@@ -490,7 +492,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         guard let controller else {
             showAlert("config.sh を読み込めません",
-                      detail: "\(scriptDir)/config.sh が存在しないか壊れています。録音機能は無効です。")
+                      detail: "\(rootDir)/config.sh が存在しないか壊れています。録音機能は無効です。")
             return
         }
 

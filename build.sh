@@ -7,15 +7,13 @@ cd "$SCRIPT_DIR"
 APP="MeetingScribe.app"
 BIN="MeetingScribe"
 
-echo "==> swiftc でビルド"
-swiftc -O MeetingScribe.swift -o "$BIN"
-swiftc -O AudioTapRecorder.swift -o MeetingScribeRecorder
-codesign --force -s - MeetingScribeRecorder
-
 echo "==> .app バンドルを生成"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-mv "$BIN" "$APP/Contents/MacOS/$BIN"
+
+echo "==> swiftc でビルド"
+swiftc -O app/MeetingScribe.swift -o "$APP/Contents/MacOS/$BIN"
+swiftc -O app/AudioTapRecorder.swift -o "$APP/Contents/MacOS/MeetingScribeRecorder"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

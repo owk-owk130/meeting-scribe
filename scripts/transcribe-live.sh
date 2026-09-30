@@ -2,7 +2,8 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/config.sh"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$ROOT_DIR/config.sh"
 source "$SCRIPT_DIR/common.sh"
 
 INTERVAL="${LIVE_INTERVAL_SECS:-30}"
