@@ -12,6 +12,7 @@ def load_meta(path):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         meta = {key: data[key] for key in ("title", "tags", "summary", "topics", "actions")}
+        meta["corrections"] = data.get("corrections", [])
         return meta
     except (OSError, ValueError, KeyError, TypeError) as e:
         print(f"warn: 要約が得られなかったため文字起こしのみのノートを作ります ({e})", file=sys.stderr)
@@ -30,6 +31,13 @@ def sections_markdown(meta):
         lines += ["", f"## {heading}", ""]
         lines += [f"- {item.strip()}" for item in items]
     return "\n".join(lines)
+
+
+def apply_corrections(body, corrections):
+    pairs = [(c["from"], c["to"]) for c in corrections if len(c["from"]) >= 2 and c["from"] != c["to"]]
+    for src, dst in sorted(pairs, key=lambda p: -len(p[0])):
+        body = body.replace(src, dst)
+    return body
 
 
 def recorded_at(recording):
@@ -71,6 +79,7 @@ if meta:
     # タグは frontmatter の [a, b] 形式に入れるので区切りと衝突する文字を落とす
     tags += [t for t in (one_line(re.sub(r"[,\[\]]", "", tag)) for tag in meta["tags"]) if t]
     sections = sections_markdown(meta)
+    body = apply_corrections(body, meta["corrections"])
 
 note = unused_path(Path(args.out_dir), stamp, title)
 note.write_text(

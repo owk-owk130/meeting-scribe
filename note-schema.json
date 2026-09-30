@@ -5,8 +5,21 @@
     "tags": { "type": "array", "items": { "type": "string" }, "description": "内容を表すタグ 2〜4 個" },
     "summary": { "type": "string", "description": "議論の概要。段落を分けた散文" },
     "topics": { "type": "array", "items": { "type": "string" }, "description": "主な論点" },
-    "actions": { "type": "array", "items": { "type": "string" }, "description": "決定事項とアクションアイテム" }
+    "actions": { "type": "array", "items": { "type": "string" }, "description": "決定事項とアクションアイテム" },
+    "corrections": {
+      "type": "array",
+      "description": "文字起こしで誤認識された固有名詞・専門用語の訂正表",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": { "type": "string", "description": "文字起こしに現れる誤った表記そのまま" },
+          "to": { "type": "string", "description": "正しい表記" }
+        },
+        "required": ["from", "to"],
+        "additionalProperties": false
+      }
+    }
   },
-  "required": ["title", "tags", "summary", "topics", "actions"],
+  "required": ["title", "tags", "summary", "topics", "actions", "corrections"],
   "additionalProperties": false
 }
