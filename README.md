@@ -68,7 +68,7 @@ open MeetingScribe.app
 
 ### ノートの形式
 
-ファイル名は `YYYY-MM-DD-HHMMSS <タイトル>.md`。frontmatter に date / recording / title / tags、
+ファイル名は `YYYY-MM-DD-HHMMSS <タイトル>.md` で、日時は録音開始時刻。frontmatter に date / recording / title / tags、
 本文に「要約」（議論の概要）「主な論点」「決定事項とアクション」「文字起こし」が入る。
 論点・決定事項が無い会議では該当セクションを省く。
 

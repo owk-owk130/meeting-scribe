@@ -11,7 +11,8 @@ def load_meta(path):
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        return {key: data[key] for key in ("title", "tags", "summary", "topics", "actions")}
+        meta = {key: data[key] for key in ("title", "tags", "summary", "topics", "actions")}
+        return meta
     except (OSError, ValueError, KeyError, TypeError) as e:
         print(f"warn: 要約が得られなかったため文字起こしのみのノートを作ります ({e})", file=sys.stderr)
         return None
@@ -31,6 +32,22 @@ def sections_markdown(meta):
     return "\n".join(lines)
 
 
+def recorded_at(recording):
+    m = re.search(r"(\d{8})-(\d{6})", recording)
+    if not m:
+        return datetime.now()
+    return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+
+
+def unused_path(directory, stamp, title):
+    note = directory / f"{stamp} {title}.md"
+    n = 2
+    while note.exists():
+        note = directory / f"{stamp} {title} ({n}).md"
+        n += 1
+    return note
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--body", required=True)
 parser.add_argument("--recording", required=True)
@@ -38,11 +55,12 @@ parser.add_argument("--out-dir", required=True)
 parser.add_argument("--meta", required=True)
 args = parser.parse_args()
 
-now = datetime.now()
-stamp = now.strftime("%Y-%m-%d-%H%M%S")
+recorded = recorded_at(args.recording)
+stamp = recorded.strftime("%Y-%m-%d-%H%M%S")
 title = f"会議メモ {stamp}"
 tags = ["meeting"]
 sections = ""
+body = Path(args.body).read_text(encoding="utf-8")
 
 meta = load_meta(args.meta)
 if meta:
@@ -54,13 +72,12 @@ if meta:
     tags += [t for t in (one_line(re.sub(r"[,\[\]]", "", tag)) for tag in meta["tags"]) if t]
     sections = sections_markdown(meta)
 
-body = Path(args.body).read_text(encoding="utf-8")
-note = Path(args.out_dir) / f"{stamp} {title}.md"
+note = unused_path(Path(args.out_dir), stamp, title)
 note.write_text(
     "\n".join(
         [
             "---",
-            f"date: {now.strftime('%Y-%m-%dT%H:%M:%S')}",
+            f"date: {recorded.strftime('%Y-%m-%dT%H:%M:%S')}",
             f"recording: {args.recording}",
             f"title: {title}",
             f"tags: [{','.join(tags)}]",
