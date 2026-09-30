@@ -3,8 +3,6 @@ import Foundation
 
 // .app は build.sh がプロジェクトディレクトリ内に生成するので、バンドルの親 = スクリプト群の場所
 let scriptDir = URL(fileURLWithPath: Bundle.main.bundlePath).deletingLastPathComponent().path
-let recordScript = "\(scriptDir)/record.sh"
-let startedFile = "\(scriptDir)/.recording.started"
 let liveTranscriptFile = "\(scriptDir)/.live-transcript.md"
 
 let idleIcon = "🎙"
@@ -40,10 +38,289 @@ func runShell(_ launchPath: String, _ args: [String]) -> ShellResult {
     return ShellResult(stdout: decode(outData), stderr: decode(errData), exitCode: process.terminationStatus)
 }
 
-@discardableResult
-func runRecordScript(_ args: [String]) -> ShellResult {
-    runShell("/bin/bash", [recordScript] + args)
+func notify(_ message: String) {
+    _ = runShell("/usr/bin/osascript", ["-e", "display notification \"\(message)\" with title \"MeetingScribe\""])
 }
+
+struct Config {
+    let recordingsDir: String
+    let vaultMeetingsDir: String
+    let liveTranscribe: Bool
+    let silenceStopMins: String
+    let silenceThresholdDB: String
+    let maxRecordMins: String
+}
+
+func loadConfig() -> Config? {
+    let result = runShell("/bin/bash", [
+        "-c",
+        "source \"\(scriptDir)/config.sh\" && printf '%s\\n' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\" "
+            + "\"${LIVE_TRANSCRIBE:-1}\" \"${SILENCE_STOP_MINS:-0}\" \"${SILENCE_THRESHOLD_DB:-}\" \"${MAX_RECORD_MINS:-0}\"",
+    ])
+    let lines = result.stdout.components(separatedBy: "\n")
+    guard result.exitCode == 0, lines.count == 6, !lines[0].isEmpty, !lines[1].isEmpty else { return nil }
+    return Config(recordingsDir: lines[0], vaultMeetingsDir: lines[1], liveTranscribe: lines[2] != "0",
+                  silenceStopMins: lines[3], silenceThresholdDB: lines[4], maxRecordMins: lines[5])
+}
+
+enum RecordingStatus {
+    case idle
+    case recording(startedAt: Date)
+    case transcribing
+}
+
+struct ControlError: Error {
+    let message: String
+}
+
+// AudioTapRecorder.swift の RecorderExit と一致させる
+enum RecorderExit: Int32 {
+    case userStop = 0
+    case silence = 2
+    case maxDuration = 3
+}
+
+func processPath(_ pid: pid_t) -> String? {
+    var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+    return proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 ? String(cString: buffer) : nil
+}
+
+// 操作はすべて queue 上で直列に走らせる（ユーザー操作とポーリングが競合しても文字起こしを二重に始めない）
+final class RecordingController {
+    let queue = DispatchQueue(label: "recording.control")
+    var onRecorderExit: (() -> Void)?
+
+    private let config: Config
+    private let recorderBin: String
+    private let transcribeScript: String
+    private let liveScript: String
+    private let logFile: String
+    private let pidFile: String
+    private let outFile: String
+    private let livePCM: String
+    private let livePIDFile: String
+    private let transcribingPIDFile: String
+    private let transcribingFileFile: String
+    private let exitFile: String
+
+    private var startedAt: Date?
+    private var liveWatcher: Process?
+    private var transcriber: Process?
+    private var transcribingPath: String?
+
+    init(scriptDir: String, config: Config) {
+        self.config = config
+        recorderBin = "\(scriptDir)/MeetingScribeRecorder"
+        transcribeScript = "\(scriptDir)/transcribe.sh"
+        liveScript = "\(scriptDir)/transcribe-live.sh"
+        logFile = "\(scriptDir)/record.log"
+        pidFile = "\(scriptDir)/.recording.pid"
+        outFile = "\(scriptDir)/.recording.file"
+        livePCM = "\(scriptDir)/.live.pcm"
+        livePIDFile = "\(scriptDir)/.live.pid"
+        transcribingPIDFile = "\(scriptDir)/.transcribing.pid"
+        transcribingFileFile = "\(scriptDir)/.transcribing.file"
+        exitFile = "\(scriptDir)/.recording.exit"
+    }
+
+    func sync() -> RecordingStatus {
+        if let pid = readPID(pidFile) {
+            if isAlive(pid, suffix: "/MeetingScribeRecorder") {
+                let started = startedAt ?? fileDate(pidFile) ?? Date()
+                startedAt = started
+                return .recording(startedAt: started)
+            }
+            if let exit = read(exitFile).flatMap(Int32.init).flatMap(RecorderExit.init) {
+                finishRecording(reason: stopReason(exit))
+            } else {
+                // 終了理由が残っていない（クラッシュ等）録音は文字起こしせず未完了に残す
+                clearRecordingState()
+            }
+        }
+        return isTranscribing ? .transcribing : .idle
+    }
+
+    func start() throws {
+        guard FileManager.default.isExecutableFile(atPath: recorderBin) else {
+            throw ControlError(message: "\(recorderBin) がありません。./build.sh を実行してください")
+        }
+        try? FileManager.default.createDirectory(atPath: config.recordingsDir, withIntermediateDirectories: true)
+        clearRecordingState()
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let outfile = "\(config.recordingsDir)/meeting-\(formatter.string(from: Date())).m4a"
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: recorderBin)
+        process.arguments = config.liveTranscribe ? [outfile, livePCM] : [outfile]
+        var environment = ProcessInfo.processInfo.environment
+        environment["SILENCE_STOP_MINS"] = config.silenceStopMins
+        environment["SILENCE_THRESHOLD_DB"] = config.silenceThresholdDB
+        environment["MAX_RECORD_MINS"] = config.maxRecordMins
+        environment["RECORDER_EXIT_FILE"] = exitFile
+        process.environment = environment
+        process.standardOutput = logHandle()
+        process.standardError = process.standardOutput
+        process.terminationHandler = { [weak self] _ in self?.onRecorderExit?() }
+        if config.liveTranscribe {
+            FileManager.default.createFile(atPath: liveTranscriptFile, contents: Data())
+        }
+        do {
+            try process.run()
+        } catch {
+            throw ControlError(message: "recorder を起動できません: \(error.localizedDescription)")
+        }
+        sleep(1)
+        guard process.isRunning else {
+            throw ControlError(message: "recorder が起動直後に終了しました。record.log を確認してください")
+        }
+        write("\(process.processIdentifier)", to: pidFile)
+        write(outfile, to: outFile)
+        startedAt = Date()
+
+        if config.liveTranscribe {
+            let watcher = try launch(script: liveScript, arguments: [livePCM, liveTranscriptFile])
+            write("\(watcher.processIdentifier)", to: livePIDFile)
+            liveWatcher = watcher
+        }
+        notify("録音を開始しました")
+    }
+
+    func stop() {
+        guard case .recording = sync(), let pid = readPID(pidFile) else { return }
+        // SIGINT でファイルを正常にファイナライズさせる
+        kill(pid, SIGINT)
+        var waited = 0
+        while waited < 30, isAlive(pid, suffix: "/MeetingScribeRecorder") {
+            usleep(200_000)
+            waited += 1
+        }
+        if isAlive(pid, suffix: "/MeetingScribeRecorder") { kill(pid, SIGKILL) }
+        finishRecording(reason: stopReason(.userStop))
+    }
+
+    func transcribe(_ path: String) throws {
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw ControlError(message: "ファイルがありません: \(path)")
+        }
+        if isTranscribing {
+            throw ControlError(message: "文字起こし中です: \(transcribingFile ?? "")")
+        }
+        try launchTranscriber(path)
+        notify("文字起こしを開始しました: \(URL(fileURLWithPath: path).lastPathComponent)")
+    }
+
+    func pending() -> [String] {
+        let fm = FileManager.default
+        var known = Set<String>()
+        for note in (try? fm.contentsOfDirectory(atPath: config.vaultMeetingsDir)) ?? []
+        where note.hasSuffix(".md") && !note.hasPrefix(".") {
+            guard let text = try? String(contentsOfFile: "\(config.vaultMeetingsDir)/\(note)", encoding: .utf8) else { continue }
+            for line in text.split(separator: "\n") where line.hasPrefix("recording:") {
+                // recording: は [a.m4a, b.m4a] のリスト形式もある
+                for token in line.split(whereSeparator: { "[], ".contains($0) }) where token.hasSuffix(".m4a") {
+                    known.insert(URL(fileURLWithPath: String(token)).lastPathComponent)
+                }
+            }
+        }
+        if let current = read(outFile) { known.insert(URL(fileURLWithPath: current).lastPathComponent) }
+        if let current = transcribingFile { known.insert(URL(fileURLWithPath: current).lastPathComponent) }
+        return ((try? fm.contentsOfDirectory(atPath: config.recordingsDir)) ?? [])
+            .filter { $0.hasSuffix(".m4a") && !$0.hasPrefix(".") && !known.contains($0) }
+            .sorted(by: >)
+            .map { "\(config.recordingsDir)/\($0)" }
+    }
+
+    private var isTranscribing: Bool {
+        transcriber?.isRunning == true || readPID(transcribingPIDFile).map { isAlive($0, suffix: "/bash") } == true
+    }
+
+    private var transcribingFile: String? {
+        if transcriber?.isRunning == true { return transcribingPath }
+        return isTranscribing ? read(transcribingFileFile) : nil
+    }
+
+    private func stopReason(_ exit: RecorderExit) -> String {
+        switch exit {
+        case .userStop: return "録音を停止しました"
+        case .silence: return "無音が \(config.silenceStopMins) 分続いたため録音を自動停止しました"
+        case .maxDuration: return "録音が \(config.maxRecordMins) 分に達したため自動停止しました"
+        }
+    }
+
+    private func finishRecording(reason: String) {
+        let outfile = read(outFile)
+        clearRecordingState()
+        guard let outfile, FileManager.default.fileExists(atPath: outfile) else { return }
+        if (try? launchTranscriber(outfile)) != nil {
+            notify("\(reason)。文字起こし中…")
+        }
+    }
+
+    private func clearRecordingState() {
+        startedAt = nil
+        remove(pidFile, outFile, exitFile)
+        stopLiveWatcher()
+    }
+
+    private func stopLiveWatcher() {
+        if let pid = readPID(livePIDFile), isAlive(pid, suffix: "/bash") { kill(pid, SIGTERM) }
+        remove(livePIDFile, livePCM, livePCM + ".rate")
+        liveWatcher = nil
+    }
+
+    private func launchTranscriber(_ path: String) throws {
+        transcriber = try launch(script: transcribeScript, arguments: [path])
+        transcribingPath = path
+    }
+
+    private func launch(script: String, arguments: [String]) throws -> Process {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [script] + arguments
+        process.standardOutput = logHandle()
+        process.standardError = process.standardOutput
+        do {
+            try process.run()
+        } catch {
+            throw ControlError(message: "\(script) を起動できません: \(error.localizedDescription)")
+        }
+        return process
+    }
+
+    // 子プロセス同士（recorder / watcher / transcribe.sh）が同じログに同時に書くので追記モードで開く
+    private func logHandle() -> FileHandle {
+        FileHandle(fileDescriptor: open(logFile, O_WRONLY | O_APPEND | O_CREAT, 0o644), closeOnDealloc: true)
+    }
+
+    private func isAlive(_ pid: pid_t, suffix: String) -> Bool {
+        processPath(pid)?.hasSuffix(suffix) == true
+    }
+
+    private func readPID(_ path: String) -> pid_t? {
+        read(path).flatMap { pid_t($0) }
+    }
+
+    private func read(_ path: String) -> String? {
+        (try? String(contentsOfFile: path, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func write(_ text: String, to path: String) {
+        try? text.write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
+    private func remove(_ paths: String...) {
+        for path in paths { try? FileManager.default.removeItem(atPath: path) }
+    }
+
+    private func fileDate(_ path: String) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+    }
+}
+
+let config = loadConfig()
 
 // .common モードに登録しないとメニュー表示中（eventTracking）にタイマーが止まる
 func makeRepeatingTimer(_ interval: TimeInterval, _ block: @escaping () -> Void) -> Timer {
@@ -51,19 +328,6 @@ func makeRepeatingTimer(_ interval: TimeInterval, _ block: @escaping () -> Void)
     RunLoop.main.add(timer, forMode: .common)
     return timer
 }
-
-func loadConfig() -> (recordingsDir: String, vaultMeetingsDir: String, liveTranscribe: Bool, configLoaded: Bool) {
-    let result = runShell("/bin/bash", [
-        "-c", "source \"\(scriptDir)/config.sh\" && printf '%s\\n%s\\n%s' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\" \"${LIVE_TRANSCRIBE:-1}\"",
-    ])
-    let lines = result.stdout.components(separatedBy: "\n")
-    guard result.exitCode == 0, lines.count == 3, !lines[0].isEmpty, !lines[1].isEmpty else {
-        return ("", "", true, false)
-    }
-    return (lines[0], lines[1], lines[2] != "0", true)
-}
-
-let (recordingsDir, vaultMeetingsDir, liveTranscribeEnabled, configLoaded) = loadConfig()
 
 final class LiveTranscriptPanel {
     private var panel: NSPanel?
@@ -174,7 +438,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var isTranscribing = false
     private var elapsedTimer: Timer?
     private var pollTimer: Timer?
-    private var scriptAvailable = true
+    private let controller = config.map { RecordingController(scriptDir: scriptDir, config: $0) }
+    private var scriptAvailable: Bool { controller != nil }
 
     private let transcribingItem = NSMenuItem(title: "文字起こし中…", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "録音開始", action: #selector(toggleRecording), keyEquivalent: "r")
@@ -191,20 +456,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.autosaveName = "MeetingScribe"
         statusItem.button?.title = idleIcon
 
-        scriptAvailable = configLoaded && FileManager.default.isExecutableFile(atPath: recordScript)
         buildMenu()
         statusItem.menu = menu
 
-        if !scriptAvailable {
-            showAlert(
-                configLoaded ? "record.sh が見つかりません" : "config.sh を読み込めません",
-                detail: configLoaded
-                    ? "\(recordScript) が存在しないか実行権限がありません。録音機能は無効です。"
-                    : "\(scriptDir)/config.sh が存在しないか壊れています。録音機能は無効です。"
-            )
+        guard let controller else {
+            showAlert("config.sh を読み込めません",
+                      detail: "\(scriptDir)/config.sh が存在しないか壊れています。録音機能は無効です。")
             return
         }
 
+        controller.onRecorderExit = { [weak self] in self?.syncState() }
         // アプリ再起動時に録音が生きているケースがあるので実状態と同期する
         syncState()
         pollTimer = makeRepeatingTimer(5) { [weak self] in self?.syncState() }
@@ -257,9 +518,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func rebuildPendingAsync() {
-        guard scriptAvailable else { return }
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let paths = runRecordScript(["pending"]).stdout.split(separator: "\n").map(String.init)
+        guard let controller else { return }
+        controller.queue.async { [weak self] in
+            let paths = controller.pending()
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.pendingItem.isHidden = paths.isEmpty
@@ -279,10 +540,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func transcribePending(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
-        syncState(after: "transcribe", path) { [weak self] result in
-            if let result, result.exitCode != 0 {
-                self?.showAlert("文字起こしを開始できませんでした", detail: result.stderr)
-            }
+        syncState({ try $0.transcribe(path) }) { [weak self] error in
+            if let error { self?.showAlert("文字起こしを開始できませんでした", detail: error.message) }
         }
     }
 
@@ -294,9 +553,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func rebuildRecentNotesAsync() {
+        guard let config else { return }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let fm = FileManager.default
-            let dirURL = URL(fileURLWithPath: vaultMeetingsDir)
+            let dirURL = URL(fileURLWithPath: config.vaultMeetingsDir)
             let notes = ((try? fm.contentsOfDirectory(
                 at: dirURL,
                 includingPropertiesForKeys: [.contentModificationDateKey],
@@ -329,26 +589,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func syncState(after command: String..., then completion: ((ShellResult?) -> Void)? = nil) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = command.isEmpty ? nil : runRecordScript(command)
-            let status = runRecordScript(["status"]).stdout
+    private func syncState(_ work: ((RecordingController) throws -> Void)? = nil,
+                           then completion: ((ControlError?) -> Void)? = nil) {
+        guard let controller else { return }
+        controller.queue.async { [weak self] in
+            var error: ControlError?
+            do {
+                try work?(controller)
+            } catch let failure as ControlError {
+                error = failure
+            } catch {}
+            let status = controller.sync()
             DispatchQueue.main.async {
-                completion?(result)
+                completion?(error)
                 self?.applyStatus(status)
             }
         }
     }
 
-    private func applyStatus(_ status: String) {
-        isTranscribing = status == "transcribing"
-        let recording = status == "recording"
-        guard recording != isRecording else { return }
-        if recording {
-            recordingStartDate = readStartedDate() ?? Date()
+    private func applyStatus(_ status: RecordingStatus) {
+        var startedAt: Date?
+        isTranscribing = false
+        switch status {
+        case .recording(let date): startedAt = date
+        case .transcribing: isTranscribing = true
+        case .idle: break
+        }
+        guard (startedAt != nil) != isRecording else { return }
+        if let startedAt {
+            recordingStartDate = startedAt
             toggleItem.title = "録音停止"
             startElapsedTimer()
-            if liveTranscribeEnabled && !livePanel.userHidden { livePanel.show() }
+            if config?.liveTranscribe == true && !livePanel.userHidden { livePanel.show() }
         } else {
             recordingStartDate = nil
             toggleItem.title = "録音開始"
@@ -360,13 +632,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleLivePanel() {
         livePanel.toggle()
-    }
-
-    private func readStartedDate() -> Date? {
-        guard let text = try? String(contentsOfFile: startedFile, encoding: .utf8),
-              let epoch = TimeInterval(text.trimmingCharacters(in: .whitespacesAndNewlines))
-        else { return nil }
-        return Date(timeIntervalSince1970: epoch)
     }
 
     private func startElapsedTimer() {
@@ -388,14 +653,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleRecording() {
         toggleItem.isEnabled = false
-        syncState(after: "toggle") { [weak self] result in
+        // メニューに出ていた状態で分岐する（直前に自動停止していた場合に新規録音を始めない）
+        let stopping = isRecording
+        syncState({ stopping ? $0.stop() : try $0.start() }) { [weak self] error in
             self?.toggleItem.isEnabled = true
-            if let result, result.exitCode != 0 {
-                self?.showAlert(
-                    "録音の開始/停止に失敗しました",
-                    detail: result.stderr.isEmpty ? "record.sh がエラーを返しました (exit \(result.exitCode))" : result.stderr
-                )
-            }
+            if let error { self?.showAlert("録音の開始/停止に失敗しました", detail: error.message) }
         }
     }
 
@@ -412,11 +674,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openRecordingsFolder() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: recordingsDir))
+        guard let config else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: config.recordingsDir))
     }
 
     @objc private func openVaultFolder() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: vaultMeetingsDir))
+        guard let config else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: config.vaultMeetingsDir))
     }
 
     private func showAlert(_ message: String, detail: String) {

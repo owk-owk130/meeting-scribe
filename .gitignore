@@ -13,7 +13,7 @@ MeetingScribeRecorder
 record.log
 .recording.pid
 .recording.file
-.recording.started
+.recording.exit
 .transcribing.pid
 .transcribing.file
 .live.pcm

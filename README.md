@@ -115,11 +115,10 @@ open MeetingScribe.app
 
 | ファイル | 役割 |
 |---|---|
-| `MeetingScribe.swift` | メニューバーアプリ本体（AppKit、1ファイル） |
+| `MeetingScribe.swift` | メニューバーアプリ本体（AppKit、1ファイル）。録音の開始/停止、未完了録音の列挙、文字起こしの起動もここが行う |
 | `AudioTapRecorder.swift` | 録音 CLI。L=デフォルト入力（自分）/ R=システム音声タップ（相手）のステレオ m4a を書く |
 | `build.sh` | ビルド + `.app` バンドル生成 |
 | `config.sh` | 共有設定（保存先パス、codex のパス、自動停止） |
-| `record.sh` | 録音の開始/停止/状態確認、未完了録音の列挙と文字起こしの再実行 |
 | `transcribe.sh` | 文字起こし、要約・タイトル・タグ生成、ノート生成 |
 | `transcribe-live.sh` | 録音中の raw PCM を定期的に文字起こしするウォッチャー |
 | `common.sh` | shell スクリプト共通の定義（ツールのパス、状態ファイル、通知、whisper / ffmpeg 呼び出し） |

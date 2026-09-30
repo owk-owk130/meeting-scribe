@@ -69,23 +69,31 @@ func nominalSampleRate(_ device: AudioObjectID) -> Double {
     return rate
 }
 
+// MeetingScribe.swift の RecorderExit と一致させる
+enum RecorderExit: Int32 {
+    case userStop = 0
+    case silence = 2
+    case maxDuration = 3
+}
+
 // 呼び出しは IO キュー上に限られるので排他は不要
 final class AutoStopMonitor {
     private let silenceStopSecs: TimeInterval
     private let maxRecordSecs: TimeInterval
     private let silenceThresholdDB: Double
-    private let stopScript: String?
+    private let onStop: (RecorderExit) -> Void
     private let startedAt = Date()
     private var lastSoundAt: Date
     private var lastLevelLogAt: Date
     private var levelMaxDB = -Double.infinity
     private var stopRequested = false
 
-    init(silenceStopSecs: TimeInterval, maxRecordSecs: TimeInterval, silenceThresholdDB: Double, stopScript: String?) {
+    init(silenceStopSecs: TimeInterval, maxRecordSecs: TimeInterval, silenceThresholdDB: Double,
+         onStop: @escaping (RecorderExit) -> Void) {
         self.silenceStopSecs = silenceStopSecs
         self.maxRecordSecs = maxRecordSecs
         self.silenceThresholdDB = silenceThresholdDB
-        self.stopScript = stopScript
+        self.onStop = onStop
         lastSoundAt = startedAt
         lastLevelLogAt = startedAt
     }
@@ -103,23 +111,19 @@ final class AutoStopMonitor {
                 levelMaxDB = -Double.infinity
             }
             if now.timeIntervalSince(lastSoundAt) >= silenceStopSecs {
-                requestStop("無音が \(Int(silenceStopSecs / 60)) 分続いたため録音を自動停止しました")
+                requestStop(.silence, "無音が \(Int(silenceStopSecs / 60)) 分続いた")
             }
         }
         if maxRecordSecs > 0, now.timeIntervalSince(startedAt) >= maxRecordSecs {
-            requestStop("録音が \(Int(maxRecordSecs / 60)) 分に達したため自動停止しました")
+            requestStop(.maxDuration, "録音が \(Int(maxRecordSecs / 60)) 分に達した")
         }
     }
 
-    private func requestStop(_ reason: String) {
+    private func requestStop(_ exit: RecorderExit, _ reason: String) {
         guard !stopRequested else { return }
         stopRequested = true
         log("auto-stop: \(reason)")
-        guard let stopScript else { kill(getpid(), SIGINT); return }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [stopScript, "stop", reason]
-        do { try process.run() } catch { kill(getpid(), SIGINT) }
+        onStop(exit)
     }
 }
 
@@ -229,12 +233,17 @@ let ioQueue = DispatchQueue(label: "recorder.io")
 var ioProcID: AudioDeviceIOProcID?
 var writeFailed = false
 
+// 自動停止も SIGINT と同じ経路でファイナライズし、理由を RECORDER_EXIT_FILE に残してアプリに伝える
+var exitCode = RecorderExit.userStop
+let exitFile = environment["RECORDER_EXIT_FILE"]
 let autoStop = AutoStopMonitor(
     silenceStopSecs: envMinutes("SILENCE_STOP_MINS"),
     maxRecordSecs: envMinutes("MAX_RECORD_MINS"),
-    silenceThresholdDB: environment["SILENCE_THRESHOLD_DB"].flatMap(Double.init) ?? -50,
-    stopScript: environment["RECORD_SCRIPT"]
-)
+    silenceThresholdDB: environment["SILENCE_THRESHOLD_DB"].flatMap(Double.init) ?? -50
+) { exit in
+    exitCode = exit
+    kill(getpid(), SIGINT)
+}
 check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, inputData, _, _, _ in
     // 各バッファ内はインターリーブの可能性があるため (データ位置, ストライド) で全チャンネルを平坦化する。
     // システム音声が鳴っていないときタップのバッファは 0 フレームになるので、
@@ -316,7 +325,8 @@ func makeSignalHandler(_ sig: Int32) -> DispatchSourceSignal {
         try? liveHandle?.close()
         AudioHardwareDestroyAggregateDevice(aggregateID)
         AudioHardwareDestroyProcessTap(tapID)
-        exit(0)
+        if let exitFile { try? String(exitCode.rawValue).write(toFile: exitFile, atomically: true, encoding: .utf8) }
+        exit(exitCode.rawValue)
     }
     source.resume()
     return source
