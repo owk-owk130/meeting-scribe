@@ -122,7 +122,7 @@ open MeetingScribe.app
 | `record.sh` | 録音の開始/停止/状態確認、未完了録音の列挙と文字起こしの再実行 |
 | `transcribe.sh` | 文字起こし、要約・タイトル・タグ生成、ノート生成 |
 | `transcribe-live.sh` | 録音中の raw PCM を定期的に文字起こしするウォッチャー |
-| `whisper-common.sh` | whisper 呼び出しの共有定義（transcribe.sh / transcribe-live.sh が source） |
+| `common.sh` | shell スクリプト共通の定義（ツールのパス、状態ファイル、通知、whisper / ffmpeg 呼び出し） |
 | `merge_transcript.py` | whisper の JSON 出力（自分/相手）を時刻順にマージ |
 | `models/` | whisper モデル |
 

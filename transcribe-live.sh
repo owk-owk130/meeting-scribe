@@ -3,7 +3,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.sh"
-source "$SCRIPT_DIR/whisper-common.sh"
+source "$SCRIPT_DIR/common.sh"
 
 INTERVAL="${LIVE_INTERVAL_SECS:-30}"
 BYTES_PER_FRAME=8   # 2ch × float32
@@ -41,11 +41,7 @@ while sleep "$INTERVAL"; do
   (( CHUNK >= RATE * BYTES_PER_FRAME * 2 )) || continue  # 2 秒未満なら次の間隔まで待つ
 
   tail -c "+$((OFFSET + 1))" "$PCM" | head -c "$CHUNK" \
-    | "$FFMPEG_BIN" -hide_banner -y -f f32le -ar "$RATE" -ac 2 -i pipe:0 \
-        -filter_complex "[0:a]channelsplit=channel_layout=stereo[l][r]" \
-        -map "[l]" -ac 1 -ar 16000 "$TMP_DIR/self.wav" \
-        -map "[r]" -ac 1 -ar 16000 "$TMP_DIR/others.wav" \
-        2>>"$LOG_FILE" || continue
+    | split_stereo "$TMP_DIR" -f f32le -ar "$RATE" -ac 2 -i pipe:0 || continue
 
   OFFSET_MS=$(( OFFSET / BYTES_PER_FRAME * 1000 / RATE ))
   OFFSET=$(( OFFSET + CHUNK ))

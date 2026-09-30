@@ -5,7 +5,7 @@
 テスト基盤はない。変更したら以下を通す。
 
 ```sh
-bash -n record.sh transcribe.sh transcribe-live.sh whisper-common.sh build.sh config.sh config.example.sh
+bash -n record.sh transcribe.sh transcribe-live.sh common.sh build.sh config.sh config.example.sh
 swiftc -O MeetingScribe.swift -o /tmp/check        # 稼働中の .app を壊さないよう出力先を分ける
 ./transcribe.sh ~/MeetingRecordings/<file>.m4a     # パイプライン全体（whisper + codex で数分）
 ```
@@ -13,7 +13,7 @@ swiftc -O MeetingScribe.swift -o /tmp/check        # 稼働中の .app を壊さ
 ## 実行環境
 
 `record.sh` / `transcribe.sh` はアプリから `nohup` で起動されるため **PATH が最小**になる。
-外部コマンドは絶対パスで呼ぶか、`config.sh` にパスを持たせる（`WHISPER_BIN` / `CODEX_BIN` がその例）。
+外部コマンドは絶対パスで呼ぶ。既定パスは `common.sh` に置いて `config.sh` で上書きできるようにする（`WHISPER_BIN`）か、`config.sh` だけに持たせる（`CODEX_BIN`）。
 
 ## 設定
 

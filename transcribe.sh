@@ -3,14 +3,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.sh"
-source "$SCRIPT_DIR/whisper-common.sh"
-
-TRANSCRIBING_PID_FILE="$SCRIPT_DIR/.transcribing.pid"
-TRANSCRIBING_FILE_FILE="$SCRIPT_DIR/.transcribing.file"
-
-notify() {
-  osascript -e "display notification \"$1\" with title \"MeetingScribe\"" 2>/dev/null || true
-}
+source "$SCRIPT_DIR/common.sh"
 
 fail() {
   echo "error: $1" >&2
@@ -103,11 +96,7 @@ PY
 CHANNELS="$("$FFPROBE_BIN" -v error -select_streams a:0 -show_entries stream=channels -of csv=p=0 "$AUDIO")"
 
 if [[ "$CHANNELS" == "2" ]]; then
-  "$FFMPEG_BIN" -nostdin -hide_banner -y -i "$AUDIO" \
-    -filter_complex "[0:a]channelsplit=channel_layout=stereo[l][r]" \
-    -map "[l]" -ac 1 -ar 16000 "$TMP_DIR/self.wav" \
-    -map "[r]" -ac 1 -ar 16000 "$TMP_DIR/others.wav" \
-    2>>"$LOG_FILE" || fail "チャンネル分離に失敗しました"
+  split_stereo "$TMP_DIR" -nostdin -i "$AUDIO" || fail "チャンネル分離に失敗しました"
 
   run_whisper "$TMP_DIR/self.wav" "$TMP_DIR/self" -oj || fail "whisper の実行に失敗しました（自分）"
   run_whisper "$TMP_DIR/others.wav" "$TMP_DIR/others" -oj || fail "whisper の実行に失敗しました（相手）"
@@ -116,8 +105,7 @@ if [[ "$CHANNELS" == "2" ]]; then
     > "$BODY" || fail "文字起こし結果のマージに失敗しました"
 else
   WAV="$TMP_DIR/audio.wav"
-  "$FFMPEG_BIN" -nostdin -hide_banner -y -i "$AUDIO" -ac 1 -ar 16000 "$WAV" 2>>"$LOG_FILE" \
-    || fail "wav 変換に失敗しました"
+  run_ffmpeg -nostdin -i "$AUDIO" -ac 1 -ar 16000 "$WAV" || fail "wav 変換に失敗しました"
   run_whisper "$WAV" "$TMP_DIR/plain" -otxt || fail "whisper の実行に失敗しました"
   cp "$TMP_DIR/plain.txt" "$BODY"
 fi

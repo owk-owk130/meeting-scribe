@@ -3,32 +3,29 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.sh"
+source "$SCRIPT_DIR/common.sh"
 
 RECORDER="$SCRIPT_DIR/MeetingScribeRecorder"
 PID_FILE="$SCRIPT_DIR/.recording.pid"
 FILE_FILE="$SCRIPT_DIR/.recording.file"
 STARTED_FILE="$SCRIPT_DIR/.recording.started"
-TRANSCRIBING_PID_FILE="$SCRIPT_DIR/.transcribing.pid"
-TRANSCRIBING_FILE_FILE="$SCRIPT_DIR/.transcribing.file"
-LOG_FILE="$SCRIPT_DIR/record.log"
 LIVE_PCM="$SCRIPT_DIR/.live.pcm"
 LIVE_TRANSCRIPT="$SCRIPT_DIR/.live-transcript.md"
 LIVE_PID_FILE="$SCRIPT_DIR/.live.pid"
 
-notify() {
-  osascript -e "display notification \"$1\" with title \"MeetingScribe\"" 2>/dev/null || true
-}
-
 # PID 生存確認だけでなくプロセス名も検証する
 # （クラッシュ後の stale PID が別プロセスに再利用されていた場合の誤 kill を防ぐ）
+pid_file_alive() {
+  [[ -f "$1" ]] || return 1
+  [[ "$(ps -p "$(cat "$1")" -o comm= 2>/dev/null)" == *"$2"* ]]
+}
+
 is_recording() {
-  [[ -f "$PID_FILE" ]] || return 1
-  [[ "$(ps -p "$(cat "$PID_FILE")" -o comm= 2>/dev/null)" == *MeetingScribeRecorder* ]]
+  pid_file_alive "$PID_FILE" MeetingScribeRecorder
 }
 
 is_transcribing() {
-  [[ -f "$TRANSCRIBING_PID_FILE" ]] || return 1
-  [[ "$(ps -p "$(cat "$TRANSCRIBING_PID_FILE")" -o comm= 2>/dev/null)" == *bash* ]]
+  pid_file_alive "$TRANSCRIBING_PID_FILE" bash
 }
 
 transcribing_file() {
@@ -49,13 +46,8 @@ clear_recording_state() {
 # watcher を止めてライブ用の中間ファイルを消す。recorder がクラッシュした後の
 # 取り残された watcher も、次の start / stop で必ずここを通して片付ける
 stop_live_watcher() {
-  local pid
-  if [[ -f "$LIVE_PID_FILE" ]]; then
-    pid="$(cat "$LIVE_PID_FILE")"
-    [[ "$(ps -p "$pid" -o comm= 2>/dev/null)" == *bash* ]] && kill "$pid" 2>/dev/null
-    rm -f "$LIVE_PID_FILE"
-  fi
-  rm -f "$LIVE_PCM" "$LIVE_PCM.rate"
+  pid_file_alive "$LIVE_PID_FILE" bash && kill "$(cat "$LIVE_PID_FILE")" 2>/dev/null
+  rm -f "$LIVE_PID_FILE" "$LIVE_PCM" "$LIVE_PCM.rate"
 }
 
 cmd_status() {
