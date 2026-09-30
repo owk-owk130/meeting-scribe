@@ -11,6 +11,7 @@ MeetingScribeRecorder
 
 # 実行時の状態・ログ
 record.log
+record.log.1
 .recording.pid
 .recording.file
 .recording.exit

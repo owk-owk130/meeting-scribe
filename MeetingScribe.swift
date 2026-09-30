@@ -8,6 +8,7 @@ let liveTranscriptFile = "\(scriptDir)/.live-transcript.md"
 let idleIcon = "🎙"
 let recordingIcon = "🔴"
 let recentNotesCount = 5
+let logRotateBytes = 10 * 1024 * 1024
 
 struct ShellResult {
     let stdout: String
@@ -146,6 +147,7 @@ final class RecordingController {
         }
         try? FileManager.default.createDirectory(atPath: config.recordingsDir, withIntermediateDirectories: true)
         clearRecordingState()
+        rotateLogIfLarge()
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -231,6 +233,13 @@ final class RecordingController {
             .filter { $0.hasSuffix(".m4a") && !$0.hasPrefix(".") && !known.contains($0) }
             .sorted(by: >)
             .map { "\(config.recordingsDir)/\($0)" }
+    }
+
+    private func rotateLogIfLarge() {
+        let size = (try? FileManager.default.attributesOfItem(atPath: logFile))?[.size] as? Int ?? 0
+        guard size > logRotateBytes else { return }
+        remove(logFile + ".1")
+        try? FileManager.default.moveItem(atPath: logFile, toPath: logFile + ".1")
     }
 
     private var isTranscribing: Bool {
