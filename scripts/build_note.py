@@ -12,7 +12,8 @@ def load_meta(path):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         meta = {key: data[key] for key in ("title", "tags", "summary", "topics", "actions")}
-        meta["corrections"] = data.get("corrections", [])
+        for key in ("corrections", "carried_over", "related_notes"):
+            meta[key] = data.get(key, [])
         return meta
     except (OSError, ValueError, KeyError, TypeError) as e:
         print(f"warn: 要約が得られなかったため文字起こしのみのノートを作ります ({e})", file=sys.stderr)
@@ -23,9 +24,15 @@ def one_line(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def sections_markdown(meta):
+def sections_markdown(meta, notes_dir):
+    related = [f"[[{name}]]" for name in meta["related_notes"] if (notes_dir / f"{name}.md").exists()]
     lines = ["## 要約", "", meta["summary"].strip()]
-    for heading, items in (("主な論点", meta["topics"]), ("決定事項とアクション", meta["actions"])):
+    for heading, items in (
+        ("主な論点", meta["topics"]),
+        ("決定事項とアクション", meta["actions"]),
+        ("前回からの持ち越し", meta["carried_over"]),
+        ("関連ノート", related),
+    ):
         if not items:
             continue
         lines += ["", f"## {heading}", ""]
@@ -60,6 +67,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--body", required=True)
 parser.add_argument("--recording", required=True)
 parser.add_argument("--out-dir", required=True)
+parser.add_argument("--notes-dir")
 parser.add_argument("--meta", required=True)
 args = parser.parse_args()
 
@@ -78,7 +86,7 @@ if meta:
         title = meta_title
     # タグは frontmatter の [a, b] 形式に入れるので区切りと衝突する文字を落とす
     tags += [t for t in (one_line(re.sub(r"[,\[\]]", "", tag)) for tag in meta["tags"]) if t]
-    sections = sections_markdown(meta)
+    sections = sections_markdown(meta, Path(args.notes_dir or args.out_dir))
     body = apply_corrections(body, meta["corrections"])
 
 note = unused_path(Path(args.out_dir), stamp, title)

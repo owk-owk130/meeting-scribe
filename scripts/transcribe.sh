@@ -55,7 +55,8 @@ if [[ ! -s "$BODY" ]]; then
   exit 0
 fi
 
-generate_meta "$BODY" "$META"
+build_codex_input "$BODY" "$BASENAME" "$TMP_DIR/codex-input.md"
+generate_meta "$TMP_DIR/codex-input.md" "$META"
 
 NOTE="$(/usr/bin/python3 "$SCRIPT_DIR/build_note.py" \
   --body "$BODY" --recording "$BASENAME" --out-dir "$VAULT_MEETINGS_DIR" --meta "$META")" \

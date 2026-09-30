@@ -36,6 +36,16 @@ generate_meta() {
   return 1
 }
 
+# 文字起こしの後に過去ノートの候補を付けた codex 入力を作る
+build_codex_input() {
+  local body="$1" recording="$2" out="$3"
+  {
+    cat "$body"
+    printf '\n\n---\n\n# 過去ノートの候補\n\n'
+    /usr/bin/python3 "$SCRIPT_DIR/list_notes.py" --dir "$VAULT_MEETINGS_DIR" --exclude-recording "$recording"
+  } > "$out"
+}
+
 run_ffmpeg() {
   "$FFMPEG_BIN" -hide_banner -y "$@" 2>>"$LOG_FILE"
 }

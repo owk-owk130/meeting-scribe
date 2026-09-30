@@ -75,6 +75,9 @@ open MeetingScribe.app
 論点・決定事項が無い会議では該当セクションを省く。
 codex が文脈から誤認識と判断した固有名詞・専門用語は文字起こし本文でも訂正する。
 
+同じ案件・定例の続きと判断した過去ノートがあれば「前回からの持ち越し」（前回のアクションの今回時点での状況）と
+「関連ノート」（`[[ノート名]]` のリンク）が付く。判断材料は直近 15 件のノートのタイトル・タグ・アクション。
+
 - **リモート会議**（システム音声に相手の声がある場合）: タイムスタンプ + 話者ラベル（自分/相手）付き
 - **対面会議など**（システム音声が無音の場合）: プレーンな文字起こし。
   マイクが部屋全体を拾うため全員の発言が入るが、話者の区別はされない
@@ -131,6 +134,7 @@ open MeetingScribe.app
 | `scripts/common.sh` | shell スクリプト共通の定義（ツールのパス、状態ファイル、通知、whisper / ffmpeg 呼び出し） |
 | `scripts/merge_transcript.py` | whisper の JSON 出力（自分/相手）を時刻順にマージ |
 | `scripts/build_note.py` | 文字起こし本文と codex の要約 JSON から Obsidian ノートを書く |
+| `scripts/list_notes.py` | 過去ノートのタイトル・タグ・アクションを codex への文脈として列挙する |
 | `scripts/note-schema.json` / `scripts/note-prompt.md` | codex に渡す要約の出力スキーマとプロンプト |
 | `models/` | whisper モデル |
 | `state/` | 実行時のログと状態ファイル。git 管理外 |

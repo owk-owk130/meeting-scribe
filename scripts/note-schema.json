@@ -6,6 +6,8 @@
     "summary": { "type": "string", "description": "議論の概要。段落を分けた散文" },
     "topics": { "type": "array", "items": { "type": "string" }, "description": "主な論点" },
     "actions": { "type": "array", "items": { "type": "string" }, "description": "決定事項とアクションアイテム" },
+    "carried_over": { "type": "array", "items": { "type": "string" }, "description": "関連する過去ノートのアクションの、この会議時点での状況" },
+    "related_notes": { "type": "array", "items": { "type": "string" }, "description": "同じ案件・テーマの過去ノートのファイル名（拡張子なし）" },
     "corrections": {
       "type": "array",
       "description": "文字起こしで誤認識された固有名詞・専門用語の訂正表",
@@ -20,6 +22,6 @@
       }
     }
   },
-  "required": ["title", "tags", "summary", "topics", "actions", "corrections"],
+  "required": ["title", "tags", "summary", "topics", "actions", "carried_over", "related_notes", "corrections"],
   "additionalProperties": false
 }

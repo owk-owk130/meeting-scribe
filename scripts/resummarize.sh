@@ -31,10 +31,11 @@ RECORDING="$(grep -m1 '^recording:' "$NOTE" | grep -o '[^][ ,]*\.m4a' | head -1)
 sed -n '/^## 文字起こし$/,$p' "$NOTE" | tail -n +3 > "$BODY"
 [[ -s "$BODY" ]] || fail "文字起こしが空です"
 
-generate_meta "$BODY" "$META" || fail "codex が要約を返しませんでした"
+build_codex_input "$BODY" "$RECORDING" "$TMP_DIR/codex-input.md"
+generate_meta "$TMP_DIR/codex-input.md" "$META" || fail "codex が要約を返しませんでした"
 
 NEW="$(/usr/bin/python3 "$SCRIPT_DIR/build_note.py" \
-  --body "$BODY" --recording "$RECORDING" --out-dir "$TMP_DIR" --meta "$META")" \
+  --body "$BODY" --recording "$RECORDING" --out-dir "$TMP_DIR" --notes-dir "$NOTE_DIR" --meta "$META")" \
   || fail "ノートの作成に失敗しました"
 
 rm -f "$NOTE"
