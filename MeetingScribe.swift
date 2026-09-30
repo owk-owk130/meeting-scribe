@@ -45,6 +45,13 @@ func runRecordScript(_ args: [String]) -> ShellResult {
     runShell("/bin/bash", [recordScript] + args)
 }
 
+// .common モードに登録しないとメニュー表示中（eventTracking）にタイマーが止まる
+func makeRepeatingTimer(_ interval: TimeInterval, _ block: @escaping () -> Void) -> Timer {
+    let timer = Timer(timeInterval: interval, repeats: true) { _ in block() }
+    RunLoop.main.add(timer, forMode: .common)
+    return timer
+}
+
 func loadConfig() -> (recordingsDir: String, vaultMeetingsDir: String, liveTranscribe: Bool, configLoaded: Bool) {
     let result = runShell("/bin/bash", [
         "-c", "source \"\(scriptDir)/config.sh\" && printf '%s\\n%s\\n%s' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\" \"${LIVE_TRANSCRIBE:-1}\"",
@@ -57,6 +64,103 @@ func loadConfig() -> (recordingsDir: String, vaultMeetingsDir: String, liveTrans
 }
 
 let (recordingsDir, vaultMeetingsDir, liveTranscribeEnabled, configLoaded) = loadConfig()
+
+final class LiveTranscriptPanel {
+    private var panel: NSPanel?
+    private var textView: NSTextView?
+    private var timer: Timer?
+    private var content: String?
+
+    // ユーザーが自分で閉じたら、以降の録音開始で自動表示しない（開き直せば元に戻る）
+    private(set) var userHidden: Bool {
+        get { UserDefaults.standard.bool(forKey: "LivePanelUserHidden") }
+        set { UserDefaults.standard.set(newValue, forKey: "LivePanelUserHidden") }
+    }
+
+    var isVisible: Bool { panel?.isVisible == true }
+
+    func show() {
+        if panel == nil {
+            panel = makePanel()
+            panel?.center()
+        }
+        content = nil
+        refresh()
+        panel?.orderFront(nil)
+        stopTimer()
+        timer = makeRepeatingTimer(2) { [weak self] in self?.refresh() }
+    }
+
+    func hide() {
+        stopTimer()
+        panel?.orderOut(nil)
+    }
+
+    func toggle() {
+        if isVisible {
+            hide()
+            userHidden = true
+        } else {
+            show()
+            userHidden = false
+        }
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    // 会議アプリの上に重ねて使うので、フォーカスを奪わない（nonactivating）ことが必須
+    private func makePanel() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
+            styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing: .buffered, defer: false
+        )
+        panel.title = "ライブ文字起こし"
+        panel.level = .floating
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.setFrameAutosaveName("MeetingScribeLivePanel")
+
+        let scroll = NSScrollView(frame: panel.contentView!.bounds)
+        scroll.autoresizingMask = [.width, .height]
+        scroll.hasVerticalScroller = true
+
+        let text = NSTextView(frame: scroll.bounds)
+        text.isEditable = false
+        text.font = .systemFont(ofSize: 13)
+        text.textContainerInset = NSSize(width: 8, height: 8)
+        text.autoresizingMask = [.width]
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        text.textContainer?.widthTracksTextView = true
+        scroll.documentView = text
+        panel.contentView?.addSubview(scroll)
+        textView = text
+
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                               object: panel, queue: nil) { [weak self] _ in
+            self?.stopTimer()
+            self?.userHidden = true
+        }
+        return panel
+    }
+
+    private func refresh() {
+        guard let text = textView else { return }
+        let latest = (try? String(contentsOfFile: liveTranscriptFile, encoding: .utf8)) ?? ""
+        guard latest != content else { return }
+        content = latest
+
+        // 末尾を見ているときだけ追従する（発言を遡って読んでいる最中に飛ばされないように）
+        let atBottom = text.enclosingScrollView!.contentView.bounds.maxY >= text.frame.height - 30
+        text.string = latest.isEmpty ? "（文字起こし待ち…）" : latest
+        if atBottom { text.scrollToEndOfDocument(nil) }
+    }
+}
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
@@ -76,16 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let toggleItem = NSMenuItem(title: "録音開始", action: #selector(toggleRecording), keyEquivalent: "r")
     private let liveItem = NSMenuItem(title: "ライブ文字起こしを表示", action: #selector(toggleLivePanel), keyEquivalent: "l")
 
-    private var livePanel: NSPanel?
-    private var liveTextView: NSTextView?
-    private var liveTimer: Timer?
-    private var liveContent: String?
-
-    // ユーザーが自分で閉じたら、以降の録音開始で自動表示しない（開き直せば元に戻る）
-    private var livePanelUserHidden: Bool {
-        get { UserDefaults.standard.bool(forKey: "LivePanelUserHidden") }
-        set { UserDefaults.standard.set(newValue, forKey: "LivePanelUserHidden") }
-    }
+    private let livePanel = LiveTranscriptPanel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -112,12 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // アプリ再起動時に録音が生きているケースがあるので実状態と同期する
         syncState()
-        // .common モードに登録しないとメニュー表示中（eventTracking）にタイマーが止まる
-        let poll = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
-            self?.syncState()
-        }
-        RunLoop.main.add(poll, forMode: .common)
-        pollTimer = poll
+        pollTimer = makeRepeatingTimer(5) { [weak self] in self?.syncState() }
     }
 
     private func buildMenu() {
@@ -258,109 +348,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             recordingStartDate = readStartedDate() ?? Date()
             toggleItem.title = "録音停止"
             startElapsedTimer()
-            if liveTranscribeEnabled && !livePanelUserHidden { showLivePanel() }
+            if liveTranscribeEnabled && !livePanel.userHidden { livePanel.show() }
         } else {
             recordingStartDate = nil
             toggleItem.title = "録音開始"
             stopElapsedTimer()
             statusItem.button?.title = idleIcon
-            hideLivePanel()
+            livePanel.hide()
         }
-    }
-
-    // 会議アプリの上に重ねて使うので、フォーカスを奪わない（nonactivating）ことが必須
-    private func makeLivePanel() -> NSPanel {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
-            backing: .buffered, defer: false
-        )
-        panel.title = "ライブ文字起こし"
-        panel.level = .floating
-        panel.isReleasedWhenClosed = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.setFrameAutosaveName("MeetingScribeLivePanel")
-
-        let scroll = NSScrollView(frame: panel.contentView!.bounds)
-        scroll.autoresizingMask = [.width, .height]
-        scroll.hasVerticalScroller = true
-
-        let text = NSTextView(frame: scroll.bounds)
-        text.isEditable = false
-        text.font = .systemFont(ofSize: 13)
-        text.textContainerInset = NSSize(width: 8, height: 8)
-        text.autoresizingMask = [.width]
-        text.isVerticallyResizable = true
-        text.isHorizontallyResizable = false
-        text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        text.textContainer?.widthTracksTextView = true
-        scroll.documentView = text
-        panel.contentView?.addSubview(scroll)
-        liveTextView = text
-
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
-                                               object: panel, queue: nil) { [weak self] _ in
-            self?.stopLiveTimer()
-            self?.livePanelUserHidden = true
-        }
-        return panel
-    }
-
-    private func showLivePanel() {
-        if livePanel == nil {
-            livePanel = makeLivePanel()
-            livePanel?.center()
-        }
-        liveContent = nil
-        refreshLiveTranscript()
-        livePanel?.orderFront(nil)
-        startLiveTimer()
-    }
-
-    private func hideLivePanel() {
-        stopLiveTimer()
-        livePanel?.orderOut(nil)
     }
 
     @objc private func toggleLivePanel() {
-        if livePanel?.isVisible == true {
-            hideLivePanel()
-            livePanelUserHidden = true
-        } else {
-            showLivePanel()
-            livePanelUserHidden = false
-        }
-    }
-
-    private func startLiveTimer() {
-        stopLiveTimer()
-        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            self?.refreshLiveTranscript()
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        liveTimer = timer
-    }
-
-    private func stopLiveTimer() {
-        liveTimer?.invalidate()
-        liveTimer = nil
-    }
-
-    private func refreshLiveTranscript() {
-        guard let text = liveTextView else { return }
-        let content = (try? String(contentsOfFile: liveTranscriptFile, encoding: .utf8)) ?? ""
-        guard content != liveContent else { return }
-        liveContent = content
-
-        // 末尾を見ているときだけ追従する（発言を遡って読んでいる最中に飛ばされないように）
-        let atBottom: Bool
-        if let scroll = text.enclosingScrollView {
-            atBottom = scroll.contentView.bounds.maxY >= text.frame.height - 30
-        } else {
-            atBottom = true
-        }
-        text.string = content.isEmpty ? "（文字起こし待ち…）" : content
-        if atBottom { text.scrollToEndOfDocument(nil) }
+        livePanel.toggle()
     }
 
     private func readStartedDate() -> Date? {
@@ -373,11 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startElapsedTimer() {
         stopElapsedTimer()
         updateElapsedTitle()
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-            self?.updateElapsedTitle()
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        elapsedTimer = timer
+        elapsedTimer = makeRepeatingTimer(1) { [weak self] in self?.updateElapsedTitle() }
     }
 
     private func stopElapsedTimer() {
