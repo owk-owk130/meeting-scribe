@@ -7,6 +7,7 @@
 ```sh
 bash -n record.sh transcribe.sh transcribe-live.sh common.sh build.sh config.sh config.example.sh
 swiftc -O MeetingScribe.swift -o /tmp/check        # 稼働中の .app を壊さないよう出力先を分ける
+swiftc -O AudioTapRecorder.swift -o /tmp/check-recorder
 ./transcribe.sh ~/MeetingRecordings/<file>.m4a     # パイプライン全体（whisper + codex で数分）
 ```
 

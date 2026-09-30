@@ -2,8 +2,12 @@ import AVFoundation
 import CoreAudio
 import Foundation
 
+func log(_ message: String) {
+    FileHandle.standardError.write("\(message)\n".data(using: .utf8)!)
+}
+
 func fail(_ message: String) -> Never {
-    FileHandle.standardError.write("error: \(message)\n".data(using: .utf8)!)
+    log("error: \(message)")
     exit(1)
 }
 
@@ -65,6 +69,60 @@ func nominalSampleRate(_ device: AudioObjectID) -> Double {
     return rate
 }
 
+// 呼び出しは IO キュー上に限られるので排他は不要
+final class AutoStopMonitor {
+    private let silenceStopSecs: TimeInterval
+    private let maxRecordSecs: TimeInterval
+    private let silenceThresholdDB: Double
+    private let stopScript: String?
+    private let startedAt = Date()
+    private var lastSoundAt: Date
+    private var lastLevelLogAt: Date
+    private var levelMaxDB = -Double.infinity
+    private var stopRequested = false
+
+    init(silenceStopSecs: TimeInterval, maxRecordSecs: TimeInterval, silenceThresholdDB: Double, stopScript: String?) {
+        self.silenceStopSecs = silenceStopSecs
+        self.maxRecordSecs = maxRecordSecs
+        self.silenceThresholdDB = silenceThresholdDB
+        self.stopScript = stopScript
+        lastSoundAt = startedAt
+        lastLevelLogAt = startedAt
+    }
+
+    func observe(sumOfSquares: Float, frames: Int) {
+        let now = Date()
+        let rms = (sumOfSquares / Float(frames)).squareRoot()
+        let db = rms > 0 ? 20 * log10(Double(rms)) : -Double.infinity
+        if silenceStopSecs > 0 {
+            levelMaxDB = max(levelMaxDB, db)
+            if db > silenceThresholdDB { lastSoundAt = now }
+            if now.timeIntervalSince(lastLevelLogAt) >= 60 {
+                log(String(format: "level: max %.1f dBFS / 60s (threshold %.0f)", levelMaxDB, silenceThresholdDB))
+                lastLevelLogAt = now
+                levelMaxDB = -Double.infinity
+            }
+            if now.timeIntervalSince(lastSoundAt) >= silenceStopSecs {
+                requestStop("無音が \(Int(silenceStopSecs / 60)) 分続いたため録音を自動停止しました")
+            }
+        }
+        if maxRecordSecs > 0, now.timeIntervalSince(startedAt) >= maxRecordSecs {
+            requestStop("録音が \(Int(maxRecordSecs / 60)) 分に達したため自動停止しました")
+        }
+    }
+
+    private func requestStop(_ reason: String) {
+        guard !stopRequested else { return }
+        stopRequested = true
+        log("auto-stop: \(reason)")
+        guard let stopScript else { kill(getpid(), SIGINT); return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [stopScript, "stop", reason]
+        do { try process.run() } catch { kill(getpid(), SIGINT) }
+    }
+}
+
 guard (2...3).contains(CommandLine.arguments.count) else {
     fail("usage: MeetingScribeRecorder <output.m4a> [live-pcm-path]")
 }
@@ -75,14 +133,10 @@ let environment = ProcessInfo.processInfo.environment
 func envMinutes(_ key: String) -> TimeInterval {
     (environment[key].flatMap(Double.init) ?? 0) * 60
 }
-let silenceStopSecs = envMinutes("SILENCE_STOP_MINS")
-let maxRecordSecs = envMinutes("MAX_RECORD_MINS")
-let silenceThresholdDB = environment["SILENCE_THRESHOLD_DB"].flatMap(Double.init) ?? -50
-let recordScript = environment["RECORD_SCRIPT"]
 
 let micDevice = defaultInputDevice()
 let micChannels = max(1, inputChannelCount(micDevice))
-FileHandle.standardError.write("input device: \(deviceName(micDevice)) (\(micChannels)ch)\n".data(using: .utf8)!)
+log("input device: \(deviceName(micDevice)) (\(micChannels)ch)")
 
 let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
 tapDescription.name = "MeetingScribeTap"
@@ -137,7 +191,7 @@ if let livePCMPath {
     FileManager.default.createFile(atPath: livePCMPath, contents: nil)
     liveHandle = FileHandle(forWritingAtPath: livePCMPath)
     if liveHandle == nil {
-        FileHandle.standardError.write("warning: live pcm を開けません: \(livePCMPath)\n".data(using: .utf8)!)
+        log("warning: live pcm を開けません: \(livePCMPath)")
     } else {
         try? String(Int(sampleRate)).write(toFile: livePCMPath + ".rate", atomically: true, encoding: .utf8)
     }
@@ -158,7 +212,7 @@ silenceEngine.connect(silenceSource, to: silenceEngine.mainMixerNode,
                           silenceEngine.outputNode.outputFormat(forBus: 0).sampleRate, channels: 1))
 func startSilenceEngine() {
     do { try silenceEngine.start() } catch {
-        FileHandle.standardError.write("warning: silence engine failed: \(error)\n".data(using: .utf8)!)
+        log("warning: silence engine failed: \(error)")
     }
 }
 // 出力デバイスが切り替わるとエンジンが止まるので再起動する
@@ -175,44 +229,12 @@ let ioQueue = DispatchQueue(label: "recorder.io")
 var ioProcID: AudioDeviceIOProcID?
 var writeFailed = false
 
-let recordingStartedAt = Date()
-var lastSoundAt = recordingStartedAt
-var lastLevelLogAt = recordingStartedAt
-var levelMaxDB = -Double.infinity
-var autoStopRequested = false
-
-func requestAutoStop(_ reason: String) {
-    guard !autoStopRequested else { return }
-    autoStopRequested = true
-    FileHandle.standardError.write("auto-stop: \(reason)\n".data(using: .utf8)!)
-    guard let recordScript else { kill(getpid(), SIGINT); return }
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/bash")
-    process.arguments = [recordScript, "stop", reason]
-    do { try process.run() } catch { kill(getpid(), SIGINT) }
-}
-
-func checkAutoStop(sumOfSquares: Float, frames: Int) {
-    let now = Date()
-    let rms = (sumOfSquares / Float(frames)).squareRoot()
-    let db = rms > 0 ? 20 * log10(Double(rms)) : -Double.infinity
-    if silenceStopSecs > 0 {
-        levelMaxDB = max(levelMaxDB, db)
-        if db > silenceThresholdDB { lastSoundAt = now }
-        if now.timeIntervalSince(lastLevelLogAt) >= 60 {
-            FileHandle.standardError.write(String(format: "level: max %.1f dBFS / 60s (threshold %.0f)\n",
-                                                  levelMaxDB, silenceThresholdDB).data(using: .utf8)!)
-            lastLevelLogAt = now
-            levelMaxDB = -Double.infinity
-        }
-        if now.timeIntervalSince(lastSoundAt) >= silenceStopSecs {
-            requestAutoStop("無音が \(Int(silenceStopSecs / 60)) 分続いたため録音を自動停止しました")
-        }
-    }
-    if maxRecordSecs > 0, now.timeIntervalSince(recordingStartedAt) >= maxRecordSecs {
-        requestAutoStop("録音が \(Int(maxRecordSecs / 60)) 分に達したため自動停止しました")
-    }
-}
+let autoStop = AutoStopMonitor(
+    silenceStopSecs: envMinutes("SILENCE_STOP_MINS"),
+    maxRecordSecs: envMinutes("MAX_RECORD_MINS"),
+    silenceThresholdDB: environment["SILENCE_THRESHOLD_DB"].flatMap(Double.init) ?? -50,
+    stopScript: environment["RECORD_SCRIPT"]
+)
 check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, inputData, _, _, _ in
     // 各バッファ内はインターリーブの可能性があるため (データ位置, ストライド) で全チャンネルを平坦化する。
     // システム音声が鳴っていないときタップのバッファは 0 フレームになるので、
@@ -258,14 +280,12 @@ check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, i
             interleaved[frame * 2 + 1] = r
         }
     }
-    if silenceStopSecs > 0 || maxRecordSecs > 0 {
-        checkAutoStop(sumOfSquares: sumOfSquares, frames: frameCount)
-    }
+    autoStop.observe(sumOfSquares: sumOfSquares, frames: frameCount)
     if let handle = liveHandle {
         do {
             try handle.write(contentsOf: interleaved.withUnsafeBufferPointer { Data(buffer: $0) })
         } catch {
-            FileHandle.standardError.write("warning: live pcm write failed: \(error)\n".data(using: .utf8)!)
+            log("warning: live pcm write failed: \(error)")
             liveHandle = nil
         }
     }
@@ -275,14 +295,14 @@ check(AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, i
         // 書けなくなったら「録音中」のまま続けず、シグナル経由でファイナライズして終わる
         if !writeFailed {
             writeFailed = true
-            FileHandle.standardError.write("error: write failed: \(error)\n".data(using: .utf8)!)
+            log("error: write failed: \(error)")
             kill(getpid(), SIGTERM)
         }
     }
 }, "create IO proc")
 
 check(AudioDeviceStart(aggregateID, ioProcID), "start aggregate device")
-FileHandle.standardError.write("recording to \(outputURL.path) @\(Int(sampleRate))Hz\n".data(using: .utf8)!)
+log("recording to \(outputURL.path) @\(Int(sampleRate))Hz")
 
 func makeSignalHandler(_ sig: Int32) -> DispatchSourceSignal {
     signal(sig, SIG_IGN)
