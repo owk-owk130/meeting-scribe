@@ -6,6 +6,12 @@ import Foundation
 let rootDir = URL(fileURLWithPath: Bundle.main.bundlePath).deletingLastPathComponent().path
 let stateDir = "\(rootDir)/state"
 let liveTranscriptFile = "\(stateDir)/live-transcript.md"
+let logFile = "\(stateDir)/record.log"
+
+// 子プロセス同士（recorder / whisper / transcribe.sh）が同じログに同時に書くので追記モードで開く
+func logHandle() -> FileHandle {
+    FileHandle(fileDescriptor: open(logFile, O_WRONLY | O_APPEND | O_CREAT, 0o644), closeOnDealloc: true)
+}
 
 let idleIcon = "🎙"
 let recordingIcon = "🔴"
@@ -77,20 +83,166 @@ struct Config {
     let silenceThresholdDB: String
     let maxRecordMins: String
     let recordingsKeepDays: Int
+    let live: LiveConfig
 }
 
+struct LiveConfig {
+    let intervalSecs: Int
+    let whisperBin: String
+    let ffmpegBin: String
+    let model: String
+    let vadModel: String
+    let language: String
+    let mergeScript: String
+}
+
+// ツールの既定パスは common.sh が持つので、shell スクリプトと同じ値を読む
 func loadConfig() -> Config? {
+    let variables = [
+        "$RECORDINGS_DIR", "$VAULT_MEETINGS_DIR", "${LIVE_TRANSCRIBE:-1}", "${SILENCE_STOP_MINS:-0}",
+        "${SILENCE_THRESHOLD_DB:-}", "${MAX_RECORD_MINS:-0}", "${RECORDINGS_KEEP_DAYS:-0}",
+        "${LIVE_INTERVAL_SECS:-30}", "$WHISPER_BIN", "$FFMPEG_BIN", "$MODEL", "$VAD_MODEL", "$WHISPER_LANG",
+    ]
     let result = runShell("/bin/bash", [
         "-c",
-        "source \"\(rootDir)/config.sh\" && printf '%s\\n' \"$RECORDINGS_DIR\" \"$VAULT_MEETINGS_DIR\" "
-            + "\"${LIVE_TRANSCRIBE:-1}\" \"${SILENCE_STOP_MINS:-0}\" \"${SILENCE_THRESHOLD_DB:-}\" \"${MAX_RECORD_MINS:-0}\" "
-            + "\"${RECORDINGS_KEEP_DAYS:-0}\"",
+        "ROOT_DIR=\"\(rootDir)\" SCRIPT_DIR=\"\(rootDir)/scripts\" && source \"$ROOT_DIR/config.sh\" "
+            + "&& source \"$SCRIPT_DIR/common.sh\" && printf '%s\\n' "
+            + variables.map { "\"\($0)\"" }.joined(separator: " "),
     ])
     let lines = result.stdout.components(separatedBy: "\n")
-    guard result.exitCode == 0, lines.count == 7, !lines[0].isEmpty, !lines[1].isEmpty else { return nil }
+    guard result.exitCode == 0, lines.count == variables.count, !lines[0].isEmpty, !lines[1].isEmpty else { return nil }
+    let live = LiveConfig(intervalSecs: Int(lines[7]) ?? 30, whisperBin: lines[8], ffmpegBin: lines[9],
+                          model: lines[10], vadModel: lines[11], language: lines[12],
+                          mergeScript: "\(rootDir)/scripts/merge_transcript.py")
     return Config(recordingsDir: lines[0], vaultMeetingsDir: lines[1], liveTranscribe: lines[2] != "0",
                   silenceStopMins: lines[3], silenceThresholdDB: lines[4], maxRecordMins: lines[5],
-                  recordingsKeepDays: Int(lines[6]) ?? 0)
+                  recordingsKeepDays: Int(lines[6]) ?? 0, live: live)
+}
+
+// 録音中の raw PCM（2ch float32 インターリーブ）を一定間隔で切り出し、自分/相手を並列に whisper にかける
+final class LiveTranscriber {
+    private static let bytesPerFrame: UInt64 = 8
+    private static let minChunkSecs: UInt64 = 2
+
+    private let config: LiveConfig
+    private let pcmPath: String
+    private let transcriptPath: String
+    private let queue = DispatchQueue(label: "live.transcribe")
+    private let tmpDir: String
+    private let lock = NSLock()
+    private var timer: DispatchSourceTimer?
+    private var running: [Process] = []
+    private var stopped = false
+    private var offset: UInt64
+    private var rate: UInt64?
+
+    init(config: LiveConfig, pcmPath: String, transcriptPath: String, resumeFromEnd: Bool) {
+        self.config = config
+        self.pcmPath = pcmPath
+        self.transcriptPath = transcriptPath
+        tmpDir = NSTemporaryDirectory() + "meetingscribe-live-\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+        offset = resumeFromEnd ? LiveTranscriber.frameAlignedSize(pcmPath) : 0
+    }
+
+    func start() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .seconds(config.intervalSecs), repeating: .seconds(config.intervalSecs))
+        timer.setEventHandler { [weak self] in self?.tick() }
+        timer.resume()
+        self.timer = timer
+    }
+
+    // 実行中の whisper ごと止める。残すと最終文字起こしとモデルが同時に走る
+    func stop() {
+        lock.lock()
+        stopped = true
+        running.forEach { $0.terminate() }
+        lock.unlock()
+        timer?.cancel()
+        queue.async { [tmpDir] in try? FileManager.default.removeItem(atPath: tmpDir) }
+    }
+
+    private static func frameAlignedSize(_ path: String) -> UInt64 {
+        let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? UInt64 ?? 0
+        return size / bytesPerFrame * bytesPerFrame
+    }
+
+    private func tick() {
+        if rate == nil {
+            rate = (try? String(contentsOfFile: pcmPath + ".rate", encoding: .utf8))
+                .flatMap { UInt64($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        guard let rate else { return }
+        let size = LiveTranscriber.frameAlignedSize(pcmPath)
+        guard size > offset, size - offset >= rate * LiveTranscriber.bytesPerFrame * LiveTranscriber.minChunkSecs,
+              let handle = FileHandle(forReadingAtPath: pcmPath) else { return }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: offset)
+        guard let chunk = try? handle.read(upToCount: Int(size - offset)) else { return }
+
+        let selfWav = "\(tmpDir)/self.wav", othersWav = "\(tmpDir)/others.wav"
+        let split = [
+            "-hide_banner", "-y", "-f", "f32le", "-ar", "\(rate)", "-ac", "2", "-i", "pipe:0",
+            "-filter_complex", "[0:a]channelsplit=channel_layout=stereo[l][r]",
+            "-map", "[l]", "-ac", "1", "-ar", "16000", selfWav,
+            "-map", "[r]", "-ac", "1", "-ar", "16000", othersWav,
+        ]
+        guard run(config.ffmpegBin, split, stdin: chunk) else { return }
+
+        let offsetMs = offset / LiveTranscriber.bytesPerFrame * 1000 / rate
+        offset = size
+
+        let whispers = [("self", selfWav), ("others", othersWav)].map { name, wav in
+            launch(config.whisperBin, [
+                "-m", config.model, "-l", config.language, "-f", wav, "-oj", "-of", "\(tmpDir)/\(name)", "-np",
+                "--vad", "--vad-model", config.vadModel,
+            ])
+        }
+        let succeeded = whispers.map { $0.map(wait) == true }
+        guard !succeeded.contains(false) else { return }
+
+        let output = Pipe()
+        let merge = [config.mergeScript, "\(tmpDir)/self.json", "\(tmpDir)/others.json",
+                     "--offset-ms", "\(offsetMs)", "--labels", "always"]
+        guard let process = launch("/usr/bin/python3", merge, stdout: output) else { return }
+        let text = output.fileHandleForReading.readDataToEndOfFile()
+        guard wait(process), let transcript = FileHandle(forWritingAtPath: transcriptPath) else { return }
+        defer { try? transcript.close() }
+        _ = try? transcript.seekToEnd()
+        try? transcript.write(contentsOf: text)
+    }
+
+    private func run(_ executable: String, _ arguments: [String], stdin data: Data) -> Bool {
+        let input = Pipe()
+        guard let process = launch(executable, arguments, stdin: input) else { return false }
+        try? input.fileHandleForWriting.write(contentsOf: data)
+        try? input.fileHandleForWriting.close()
+        return wait(process)
+    }
+
+    private func launch(_ executable: String, _ arguments: [String], stdin: Pipe? = nil, stdout: Pipe? = nil) -> Process? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !stopped else { return nil }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardInput = stdin ?? FileHandle.nullDevice
+        process.standardOutput = stdout ?? FileHandle.nullDevice
+        process.standardError = logHandle()
+        guard (try? process.run()) != nil else { return nil }
+        running.append(process)
+        return process
+    }
+
+    private func wait(_ process: Process) -> Bool {
+        process.waitUntilExit()
+        lock.lock()
+        running.removeAll { $0 === process }
+        lock.unlock()
+        return process.terminationStatus == 0
+    }
 }
 
 enum RecordingStatus {
@@ -124,19 +276,16 @@ final class RecordingController {
     private let recorderBin: String
     private let transcribeScript: String
     private let resummarizeScript: String
-    private let liveScript: String
-    private let logFile: String
     private let pidFile: String
     private let outFile: String
     private let livePCM: String
-    private let livePIDFile: String
     private let transcribingPIDFile: String
     private let transcribingFileFile: String
     private let exitFile: String
     private let pausedFile: String
     private let startedFile: String
 
-    private var liveWatcher: Process?
+    private var liveTranscriber: LiveTranscriber?
     private var transcriber: Process?
     private var transcribingPath: String?
 
@@ -145,12 +294,9 @@ final class RecordingController {
         recorderBin = "\(Bundle.main.bundlePath)/Contents/MacOS/MeetingScribeRecorder"
         transcribeScript = "\(rootDir)/scripts/transcribe.sh"
         resummarizeScript = "\(rootDir)/scripts/resummarize.sh"
-        liveScript = "\(rootDir)/scripts/transcribe-live.sh"
-        logFile = "\(stateDir)/record.log"
         pidFile = "\(stateDir)/recording.pid"
         outFile = "\(stateDir)/recording.file"
         livePCM = "\(stateDir)/live.pcm"
-        livePIDFile = "\(stateDir)/live.pid"
         transcribingPIDFile = "\(stateDir)/transcribing.pid"
         transcribingFileFile = "\(stateDir)/transcribing.file"
         exitFile = "\(stateDir)/recording.exit"
@@ -163,6 +309,10 @@ final class RecordingController {
         if let pid = readPID(pidFile) {
             if isAlive(pid, suffix: "/MeetingScribeRecorder") {
                 let started = readDate(startedFile) ?? fileDate(pidFile) ?? Date()
+                // アプリを再起動した直後は録音だけが続いているので、今の位置からライブを再開する
+                if liveTranscriber == nil, config.liveTranscribe, FileManager.default.fileExists(atPath: livePCM) {
+                    startLiveTranscriber(resumeFromEnd: true)
+                }
                 return .recording(startedAt: started, pausedAt: readDate(pausedFile))
             }
             if let exit = read(exitFile).flatMap(Int32.init).flatMap(RecorderExit.init) {
@@ -221,11 +371,7 @@ final class RecordingController {
             try? json.write(to: URL(fileURLWithPath: eventSidecar(outfile)))
         }
 
-        if config.liveTranscribe {
-            let watcher = try launch(script: liveScript, arguments: [livePCM, liveTranscriptFile])
-            write("\(watcher.processIdentifier)", to: livePIDFile)
-            liveWatcher = watcher
-        }
+        if config.liveTranscribe { startLiveTranscriber(resumeFromEnd: false) }
         notify("録音を開始しました")
     }
 
@@ -350,10 +496,17 @@ final class RecordingController {
         stopLiveWatcher()
     }
 
+    private func startLiveTranscriber(resumeFromEnd: Bool) {
+        let transcriber = LiveTranscriber(config: config.live, pcmPath: livePCM, transcriptPath: liveTranscriptFile,
+                                          resumeFromEnd: resumeFromEnd)
+        transcriber.start()
+        liveTranscriber = transcriber
+    }
+
     private func stopLiveWatcher() {
-        if let pid = readPID(livePIDFile), isAlive(pid, suffix: "/bash") { kill(pid, SIGTERM) }
-        remove(livePIDFile, livePCM, livePCM + ".rate")
-        liveWatcher = nil
+        liveTranscriber?.stop()
+        liveTranscriber = nil
+        remove(livePCM, livePCM + ".rate")
     }
 
     private func launchTranscriber(_ path: String) throws {
@@ -373,11 +526,6 @@ final class RecordingController {
             throw ControlError(message: "\(script) を起動できません: \(error.localizedDescription)")
         }
         return process
-    }
-
-    // 子プロセス同士（recorder / watcher / transcribe.sh）が同じログに同時に書くので追記モードで開く
-    private func logHandle() -> FileHandle {
-        FileHandle(fileDescriptor: open(logFile, O_WRONLY | O_APPEND | O_CREAT, 0o644), closeOnDealloc: true)
     }
 
     private func isAlive(_ pid: pid_t, suffix: String) -> Bool {

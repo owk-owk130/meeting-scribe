@@ -128,13 +128,12 @@ open MeetingScribe.app
 
 | ファイル | 役割 |
 |---|---|
-| `app/MeetingScribe.swift` | メニューバーアプリ本体（AppKit、1ファイル）。録音の開始/停止、未完了録音の列挙、文字起こしの起動もここが行う |
+| `app/MeetingScribe.swift` | メニューバーアプリ本体（AppKit、1ファイル）。録音の開始/停止、ライブ文字起こし、未完了録音の列挙、文字起こしの起動もここが行う |
 | `app/AudioTapRecorder.swift` | 録音 CLI。L=デフォルト入力（自分）/ R=システム音声タップ（相手）のステレオ m4a を書く |
 | `build.sh` | ビルド + `.app` バンドル生成。recorder もバンドル内に置く |
 | `config.sh` | 共有設定（保存先パス、codex のパス、自動停止） |
 | `scripts/transcribe.sh` | 文字起こし、要約・タイトル・タグ生成、ノート生成 |
 | `scripts/resummarize.sh` | 既存ノートの文字起こしから要約・タイトル・タグを作り直す |
-| `scripts/transcribe-live.sh` | 録音中の raw PCM を定期的に文字起こしするウォッチャー |
 | `scripts/common.sh` | shell スクリプト共通の定義（ツールのパス、状態ファイル、通知、whisper / ffmpeg 呼び出し） |
 | `scripts/merge_transcript.py` | whisper の JSON 出力（自分/相手）を時刻順にマージ |
 | `scripts/build_note.py` | 文字起こし本文と codex の要約 JSON から Obsidian ノートを書く |

@@ -13,7 +13,7 @@ scripts/transcribe.sh ~/MeetingRecordings/<file>.m4a    # パイプライン全�
 
 ## 実行環境
 
-recorder と `scripts/transcribe.sh` / `scripts/transcribe-live.sh` はアプリが `Process` で起動するため **PATH が最小**になる。
+recorder・whisper・ffmpeg と `scripts/transcribe.sh` はアプリが `Process` で起動するため **PATH が最小**になる。
 外部コマンドは絶対パスで呼ぶ。既定パスは `scripts/common.sh` に置いて `config.sh` で上書きできるようにする（`WHISPER_BIN`）か、`config.sh` だけに持たせる（`CODEX_BIN`）。
 
 ## 設定
