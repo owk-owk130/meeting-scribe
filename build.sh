@@ -36,6 +36,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<string>会議の録音に使用します</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>会議相手の声（システム音声）の録音に使用します</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>録音中の会議の予定名と参加者をノートに記録するために使用します</string>
 </dict>
 </plist>
 PLIST

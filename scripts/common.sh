@@ -36,11 +36,20 @@ generate_meta() {
   return 1
 }
 
-# 文字起こしの後に過去ノートの候補を付けた codex 入力を作る
+event_sidecar() {
+  echo "$RECORDINGS_DIR/${1%.m4a}.event.json"
+}
+
+# 文字起こしの後にカレンダーの予定と過去ノートの候補を付けた codex 入力を作る
 build_codex_input() {
-  local body="$1" recording="$2" out="$3"
+  local body="$1" recording="$2" out="$3" event
+  event="$(event_sidecar "$recording")"
   {
     cat "$body"
+    if [[ -s "$event" ]]; then
+      printf '\n\n---\n\n# カレンダーの予定\n\n'
+      cat "$event"
+    fi
     printf '\n\n---\n\n# 過去ノートの候補\n\n'
     /usr/bin/python3 "$SCRIPT_DIR/list_notes.py" --dir "$VAULT_MEETINGS_DIR" --exclude-recording "$recording"
   } > "$out"

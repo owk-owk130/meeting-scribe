@@ -35,7 +35,8 @@ build_codex_input "$BODY" "$RECORDING" "$TMP_DIR/codex-input.md"
 generate_meta "$TMP_DIR/codex-input.md" "$META" || fail "codex が要約を返しませんでした"
 
 NEW="$(/usr/bin/python3 "$SCRIPT_DIR/build_note.py" \
-  --body "$BODY" --recording "$RECORDING" --out-dir "$TMP_DIR" --notes-dir "$NOTE_DIR" --meta "$META")" \
+  --body "$BODY" --recording "$RECORDING" --out-dir "$TMP_DIR" --notes-dir "$NOTE_DIR" --meta "$META" \
+  --event "$(event_sidecar "$RECORDING")")" \
   || fail "ノートの作成に失敗しました"
 
 rm -f "$NOTE"

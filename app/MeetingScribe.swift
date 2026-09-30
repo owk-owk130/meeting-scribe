@@ -1,4 +1,5 @@
 import AppKit
+import EventKit
 import Foundation
 
 // .app は build.sh がプロジェクトルートに生成するので、バンドルの親 = プロジェクトルート
@@ -11,6 +12,28 @@ let recordingIcon = "🔴"
 let pausedIcon = "⏸"
 let recentNotesCount = 5
 let logRotateBytes = 10 * 1024 * 1024
+let eventLookaheadSecs: TimeInterval = 10 * 60
+let eventStore = EKEventStore()
+
+func eventSidecar(_ recording: String) -> String {
+    recording.replacingOccurrences(of: ".m4a", with: ".event.json")
+}
+
+// 進行中か 10 分以内に始まる予定。録音は会議の少し前に始めることが多い
+func currentCalendarEvents() -> [[String: Any]] {
+    guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return [] }
+    let now = Date()
+    let predicate = eventStore.predicateForEvents(withStart: now, end: now.addingTimeInterval(eventLookaheadSecs), calendars: nil)
+    let formatter = ISO8601DateFormatter()
+    return eventStore.events(matching: predicate).filter { !$0.isAllDay }.map { event in
+        [
+            "title": event.title ?? "",
+            "start": formatter.string(from: event.startDate),
+            "end": formatter.string(from: event.endDate),
+            "attendees": (event.attendees ?? []).compactMap { $0.name },
+        ]
+    }
+}
 
 struct ShellResult {
     let stdout: String
@@ -192,6 +215,10 @@ final class RecordingController {
         write("\(process.processIdentifier)", to: pidFile)
         write(outfile, to: outFile)
         startedAt = Date()
+        let events = currentCalendarEvents()
+        if !events.isEmpty, let json = try? JSONSerialization.data(withJSONObject: events) {
+            try? json.write(to: URL(fileURLWithPath: eventSidecar(outfile)))
+        }
 
         if config.liveTranscribe {
             let watcher = try launch(script: liveScript, arguments: [livePCM, liveTranscriptFile])
@@ -280,7 +307,7 @@ final class RecordingController {
         let noted = notedRecordings()
         for name in recordings() where noted.contains(name) {
             let path = "\(config.recordingsDir)/\(name)"
-            if let date = fileDate(path), date < cutoff { remove(path) }
+            if let date = fileDate(path), date < cutoff { remove(path, eventSidecar(path)) }
         }
     }
 
@@ -526,6 +553,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         controller.onRecorderExit = { [weak self] in self?.syncState() }
+        // 録音開始時に待たされないよう、権限は起動時に非同期で求めておく
+        eventStore.requestFullAccessToEvents { _, _ in }
         syncState()
         pollTimer = makeRepeatingTimer(5) { [weak self] in self?.syncState() }
     }

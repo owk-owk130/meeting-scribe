@@ -49,7 +49,7 @@ else
 fi
 
 if [[ ! -s "$BODY" ]]; then
-  rm -f "$AUDIO"
+  rm -f "$AUDIO" "$(event_sidecar "$BASENAME")"
   echo "silent: deleted $AUDIO" >&2
   notify "発話が検出されなかったため音源を削除しました: $BASENAME"
   exit 0
@@ -59,7 +59,8 @@ build_codex_input "$BODY" "$BASENAME" "$TMP_DIR/codex-input.md"
 generate_meta "$TMP_DIR/codex-input.md" "$META"
 
 NOTE="$(/usr/bin/python3 "$SCRIPT_DIR/build_note.py" \
-  --body "$BODY" --recording "$BASENAME" --out-dir "$VAULT_MEETINGS_DIR" --meta "$META")" \
+  --body "$BODY" --recording "$BASENAME" --out-dir "$VAULT_MEETINGS_DIR" --meta "$META" \
+  --event "$(event_sidecar "$BASENAME")")" \
   || fail "ノートの作成に失敗しました"
 
 notify "文字起こしが完了しました: $(basename "$NOTE")"

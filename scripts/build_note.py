@@ -47,6 +47,14 @@ def apply_corrections(body, corrections):
     return body
 
 
+def load_event(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)[0]
+    except (OSError, ValueError, IndexError, TypeError):
+        return None
+
+
 def recorded_at(recording):
     m = re.search(r"(\d{8})-(\d{6})", recording)
     if not m:
@@ -68,6 +76,7 @@ parser.add_argument("--body", required=True)
 parser.add_argument("--recording", required=True)
 parser.add_argument("--out-dir", required=True)
 parser.add_argument("--notes-dir")
+parser.add_argument("--event")
 parser.add_argument("--meta", required=True)
 args = parser.parse_args()
 
@@ -89,6 +98,13 @@ if meta:
     sections = sections_markdown(meta, Path(args.notes_dir or args.out_dir))
     body = apply_corrections(body, meta["corrections"])
 
+event = load_event(args.event) if args.event else None
+event_lines = []
+if event:
+    event_lines.append(f"event: {one_line(event['title'])}")
+    attendees = [one_line(re.sub(r"[,\[\]]", "", a)) for a in event["attendees"]]
+    event_lines.append(f"attendees: [{','.join(a for a in attendees if a)}]")
+
 note = unused_path(Path(args.out_dir), stamp, title)
 note.write_text(
     "\n".join(
@@ -98,6 +114,9 @@ note.write_text(
             f"recording: {args.recording}",
             f"title: {title}",
             f"tags: [{','.join(tags)}]",
+        ]
+        + event_lines
+        + [
             "---",
             "",
             f"# {title}",
