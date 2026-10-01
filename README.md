@@ -127,12 +127,14 @@ open MeetingScribe.app
 ## 構成
 
 ```
-app/        メニューバーアプリと録音 CLI の Swift ソース
-scripts/    録音ファイルからノートを作るスクリプト、codex のプロンプトとスキーマ
-models/     whisper と VAD のモデル
-state/      ログと実行中の状態ファイル
-build.sh    .app バンドルを作る
-config.sh   個人設定。config.example.sh から作る
+app/MeetingScribe/          メニューバーアプリの Swift ソース
+app/MeetingScribeRecorder/  録音 CLI の Swift ソース
+app/Shared/                 アプリと録音 CLI で共有する定義
+scripts/                    録音ファイルからノートを作るスクリプト、codex のプロンプトとスキーマ
+models/                     whisper と VAD のモデル
+state/                      ログと実行中の状態ファイル
+build.sh                    .app バンドルを作る
+config.sh                   個人設定。config.example.sh から作る
 ```
 
 ## ライセンス

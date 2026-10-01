@@ -12,8 +12,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "==> swiftc でビルド"
-swiftc -O app/MeetingScribe.swift -o "$APP/Contents/MacOS/$BIN"
-swiftc -O app/AudioTapRecorder.swift -o "$APP/Contents/MacOS/MeetingScribeRecorder"
+swiftc -O app/MeetingScribe/*.swift app/Shared/*.swift -o "$APP/Contents/MacOS/$BIN"
+swiftc -O app/MeetingScribeRecorder/*.swift app/Shared/*.swift -o "$APP/Contents/MacOS/MeetingScribeRecorder"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

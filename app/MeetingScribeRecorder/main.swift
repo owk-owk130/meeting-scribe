@@ -69,13 +69,6 @@ func nominalSampleRate(_ device: AudioObjectID) -> Double {
     return rate
 }
 
-// MeetingScribe.swift の RecorderExit と一致させる
-enum RecorderExit: Int32 {
-    case userStop = 0
-    case silence = 2
-    case maxDuration = 3
-}
-
 // 呼び出しは IO キュー上に限られるので排他は不要
 final class AutoStopMonitor {
     private let silenceStopSecs: TimeInterval

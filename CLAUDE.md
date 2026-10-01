@@ -6,8 +6,8 @@
 
 ```sh
 bash -n scripts/*.sh build.sh config.sh config.example.sh
-swiftc -O app/MeetingScribe.swift -o /tmp/check          # 稼働中の .app を壊さないよう出力先を分ける
-swiftc -O app/AudioTapRecorder.swift -o /tmp/check-recorder
+swiftc -O app/MeetingScribe/*.swift app/Shared/*.swift -o /tmp/check     # 稼働中の .app を壊さないよう出力先を分ける
+swiftc -O app/MeetingScribeRecorder/*.swift app/Shared/*.swift -o /tmp/check-recorder
 scripts/transcribe.sh ~/MeetingRecordings/<file>.m4a    # パイプライン全体（whisper + codex で数分）
 ```
 
