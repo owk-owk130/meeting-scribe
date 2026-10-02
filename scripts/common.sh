@@ -28,7 +28,7 @@ run_whisper() {
 # Vault は git リポジトリではないので --skip-git-repo-check は必須
 generate_meta() {
   local body="$1" meta="$2" codex_log="$TMP_DIR/codex.log" attempt
-  [[ -x "${CODEX_BIN:-}" ]] || return 1
+  [[ -x "${CODEX_BIN:-}" ]] || { echo "warn: codex がありません: ${CODEX_BIN:-}" >&2; return 1; }
   for attempt in 1 2; do
     "$CODEX_BIN" exec -s read-only --skip-git-repo-check \
       --output-schema "$SCRIPT_DIR/note-schema.json" -o "$meta" \
