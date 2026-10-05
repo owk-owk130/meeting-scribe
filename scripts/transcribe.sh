@@ -39,13 +39,29 @@ if [[ "$CHANNELS" == "2" ]]; then
   run_whisper "$TMP_DIR/self.wav" "$TMP_DIR/self" -oj || fail "whisper の実行に失敗しました（自分）"
   run_whisper "$TMP_DIR/others.wav" "$TMP_DIR/others" -oj || fail "whisper の実行に失敗しました（相手）"
 
-  /usr/bin/python3 "$SCRIPT_DIR/merge_transcript.py" "$TMP_DIR/self.json" "$TMP_DIR/others.json" \
+  # 相手側が無音なら対面会議なので、マイクに入った全員を分ける
+  SPEAKERS=()
+  if [[ -n "$(/usr/bin/python3 "$SCRIPT_DIR/merge_transcript.py" "$TMP_DIR/others.json")" ]]; then
+    run_diarize "$TMP_DIR/others.wav" "$TMP_DIR/speakers.json" "$(event_sidecar "$BASENAME")" \
+      && SPEAKERS=(--others-speakers "$TMP_DIR/speakers.json")
+  else
+    run_diarize "$TMP_DIR/self.wav" "$TMP_DIR/speakers.json" "$(event_sidecar "$BASENAME")" \
+      && SPEAKERS=(--self-speakers "$TMP_DIR/speakers.json")
+  fi
+
+  /usr/bin/python3 "$SCRIPT_DIR/merge_transcript.py" "$TMP_DIR/self.json" "$TMP_DIR/others.json" ${SPEAKERS[@]+"${SPEAKERS[@]}"} \
     > "$BODY" || fail "文字起こし結果のマージに失敗しました"
 else
   WAV="$TMP_DIR/audio.wav"
   run_ffmpeg -nostdin -i "$AUDIO" -ac 1 -ar 16000 "$WAV" || fail "wav 変換に失敗しました"
-  run_whisper "$WAV" "$TMP_DIR/plain" -otxt || fail "whisper の実行に失敗しました"
-  cp "$TMP_DIR/plain.txt" "$BODY"
+  run_whisper "$WAV" "$TMP_DIR/plain" -oj || fail "whisper の実行に失敗しました"
+
+  SPEAKERS=()
+  run_diarize "$WAV" "$TMP_DIR/speakers.json" "$(event_sidecar "$BASENAME")" \
+    && SPEAKERS=(--self-speakers "$TMP_DIR/speakers.json")
+
+  /usr/bin/python3 "$SCRIPT_DIR/merge_transcript.py" "$TMP_DIR/plain.json" ${SPEAKERS[@]+"${SPEAKERS[@]}"} \
+    > "$BODY" || fail "文字起こし結果の整形に失敗しました"
 fi
 
 if [[ ! -s "$BODY" ]]; then

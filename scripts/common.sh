@@ -1,6 +1,8 @@
 : "${WHISPER_BIN:=/opt/homebrew/bin/whisper-cli}"
 : "${FFMPEG_BIN:=/opt/homebrew/bin/ffmpeg}"
 : "${FFPROBE_BIN:=/opt/homebrew/bin/ffprobe}"
+: "${DIARIZE:=1}"
+: "${DIARIZE_PYTHON:=$ROOT_DIR/.venv/bin/python}"
 MODEL="$ROOT_DIR/models/ggml-large-v3-turbo.bin"
 VAD_MODEL="$ROOT_DIR/models/ggml-silero-v5.1.2.bin"
 WHISPER_LANG="ja"
@@ -20,6 +22,14 @@ run_whisper() {
   local err="$2.whisper.log"
   "$WHISPER_BIN" -m "$MODEL" -l "$WHISPER_LANG" -f "$1" "$3" -of "$2" -np \
     --vad --vad-model "$VAD_MODEL" >/dev/null 2>"$err" && return 0
+  cat "$err" >>"$LOG_FILE"
+  return 1
+}
+
+run_diarize() {
+  local err="$2.diarize.log"
+  [[ "$DIARIZE" == "1" && -x "$DIARIZE_PYTHON" ]] || return 1
+  "$DIARIZE_PYTHON" "$SCRIPT_DIR/diarize.py" "$1" "$2" --event "$3" >/dev/null 2>"$err" && return 0
   cat "$err" >>"$LOG_FILE"
   return 1
 }

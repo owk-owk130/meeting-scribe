@@ -11,3 +11,6 @@ MeetingScribe.app/
 state/
 
 .DS_Store
+
+# 話者分離の Python 環境（uv sync で作る）
+.venv/

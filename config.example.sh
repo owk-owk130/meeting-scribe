@@ -11,6 +11,10 @@ CODEX_BIN="$HOME/.local/share/mise/shims/codex"
 # FFMPEG_BIN="/opt/homebrew/bin/ffmpeg"
 # FFPROBE_BIN="/opt/homebrew/bin/ffprobe"
 
+# 話者分離。uv sync で作った .venv があるときだけ動く。0 で止める
+DIARIZE=1
+# DIARIZE_PYTHON="$ROOT_DIR/.venv/bin/python"
+
 LIVE_TRANSCRIBE=1
 
 LIVE_INTERVAL_SECS=30

@@ -2,12 +2,13 @@
 
 ## 検証
 
-テスト基盤はない。変更したら以下を通す。
+テストは merge_transcript の単体テストだけ。変更したら以下を通す。
 
 ```sh
 bash -n scripts/*.sh build.sh config.sh config.example.sh
 swiftc -O app/MeetingScribe/*.swift app/Shared/*.swift -o /tmp/check     # 稼働中の .app を壊さないよう出力先を分ける
 swiftc -O app/MeetingScribeRecorder/*.swift app/Shared/*.swift -o /tmp/check-recorder
+(cd scripts && /usr/bin/python3 -m unittest test_merge_transcript)
 scripts/transcribe.sh ~/MeetingRecordings/<file>.m4a    # パイプライン全体（whisper + codex で数分）
 ```
 

@@ -12,7 +12,7 @@ def load_meta(path):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         meta = {key: data[key] for key in ("title", "tags", "summary", "topics", "actions")}
-        for key in ("corrections", "carried_over", "related_notes"):
+        for key in ("corrections", "carried_over", "related_notes", "speakers"):
             meta[key] = data.get(key, [])
         return meta
     except (OSError, ValueError, KeyError, TypeError) as e:
@@ -36,6 +36,7 @@ def sections_markdown(meta, notes_dir):
         ("決定事項とアクション", meta["actions"]),
         ("前回からの持ち越し", meta["carried_over"]),
         ("関連ノート", related),
+        ("話者の推定", [f"{s['label']}: {s['name']}" for s in meta["speakers"]]),
     ):
         if not items:
             continue

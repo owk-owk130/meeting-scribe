@@ -8,6 +8,19 @@
     "actions": { "type": "array", "items": { "type": "string" }, "description": "決定事項とアクションアイテム" },
     "carried_over": { "type": "array", "items": { "type": "string" }, "description": "関連する過去ノートのアクションの、この会議時点での状況" },
     "related_notes": { "type": "array", "items": { "type": "string" }, "description": "同じ案件・テーマの過去ノートのファイル名（拡張子なし）" },
+    "speakers": {
+      "type": "array",
+      "description": "話者ラベルごとの推定名",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": { "type": "string", "description": "文字起こし中の話者ラベル。例: 話者A、相手B" },
+          "name": { "type": "string", "description": "推定した名前" }
+        },
+        "required": ["label", "name"],
+        "additionalProperties": false
+      }
+    },
     "corrections": {
       "type": "array",
       "description": "文字起こしで誤認識された固有名詞・専門用語の訂正表",
@@ -22,6 +35,6 @@
       }
     }
   },
-  "required": ["title", "tags", "summary", "topics", "actions", "carried_over", "related_notes", "corrections"],
+  "required": ["title", "tags", "summary", "topics", "actions", "carried_over", "related_notes", "speakers", "corrections"],
   "additionalProperties": false
 }

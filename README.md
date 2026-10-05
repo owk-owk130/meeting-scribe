@@ -10,13 +10,14 @@
 - Xcode Command Line Tools
 - ffmpeg、whisper-cpp
 - codex CLI。無くても文字起こしだけのノートは作れる
+- uv と Hugging Face のアカウント。話者分離に使う。無くても話者ラベル無しで動く
 
 ## セットアップ
 
 ```sh
 git clone https://github.com/owk-owk130/meeting-scribe.git
 cd meeting-scribe
-brew install ffmpeg whisper-cpp
+brew install ffmpeg whisper-cpp uv
 
 mkdir -p models
 curl -L -o models/ggml-large-v3-turbo.bin \
@@ -28,6 +29,14 @@ cp config.example.sh config.sh   # Vault の場所と codex のパスを書く
 ./build.sh
 open MeetingScribe.app
 ```
+
+話者分離を使う場合は、続けて次を行う。使わなければ飛ばしてよく、話者ラベルの無いノートになる。
+
+1. Hugging Face のアカウントで [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) を開き、利用規約に同意する
+2. `uv sync` で Python 環境を `.venv` に作る。約 1GB
+3. `uv run hf auth login` でログインする。トークンは `~/.cache/huggingface` に保存される
+
+モデルは初回の文字起こし時にダウンロードされるので、そのときはネットにつないでおく。
 
 初回はマイク・システム音声・カレンダーの許可を求められる。カレンダーは任意で、拒否しても録音は動く。
 
@@ -63,7 +72,7 @@ iPhone のボイスメモなどで録った音声を iCloud Drive の `INBOX_DIR
 録音中・文字起こし中は待ち、1 件ずつ処理する。取り込んだ元ファイルは消える。
 
 - ノートの日時はファイルの作成日時。ボイスメモは共有した時刻になるので、録音後すぐ送る
-- ステレオでもモノラルに変換するので、話者ラベルの無い文字起こしになる
+- ステレオでもモノラルに変換し、左右ではなく声で話者を分ける
 - 取り込みに失敗したファイルは受け取りフォルダに残り、アプリを再起動するまで再試行しない
 
 共有シートから送るショートカットを作っておくと手早い。
@@ -85,12 +94,16 @@ date / recording / title / tags / event / attendees
 ## 決定事項とアクション
 ## 前回からの持ち越し     同じ案件の過去ノートのアクションが今どうなったか
 ## 関連ノート             過去ノートへの [[リンク]]
+## 話者の推定             話者ラベルと、文脈から推定した名前
 ## 文字起こし             折りたたみで既定は閉じている
 ```
 
 - 中身の無い節は省く。event と attendees はカレンダーの予定があるときだけ付く
 - 誤認識された固有名詞は codex が文脈から推測し、文字起こしでも直す
-- 対面会議のように相手側の音が無い録音は、話者ラベルの無い文字起こしになる
+- 対面会議やスマホの録音は声で話者を分け、話者A・話者B… のラベルを付ける。リモート会議の相手が複数いれば相手A・相手B… になる
+- 文字起こしの発言には話者ごとに 🔵🟠🟢 のような色の丸が付く
+- 話者の分け方は完璧ではなく、同じ人が別ラベルになることもある。人数はカレンダーの参加者数を上限にして推定する
+- 話者分離を使うと、ノートができるまでが 30 分の録音あたり 2〜3 分延びる
 - codex が使えないときは `会議メモ <日時>` という名前の、文字起こしだけのノートになる
 
 ## 設定
@@ -102,6 +115,7 @@ date / recording / title / tags / event / attendees
 | `RECORDINGS_DIR` | 録音ファイルの保存先 | `~/MeetingRecordings` |
 | `VAULT_MEETINGS_DIR` | ノートの保存先 | Vault 内の `Meetings` |
 | `CODEX_BIN` | codex の絶対パス | |
+| `DIARIZE` | 0 で話者分離を止める | `1` |
 | `LIVE_TRANSCRIBE` | 0 でライブ文字起こしを止める。バッテリー節約に | `1` |
 | `LIVE_INTERVAL_SECS` | ライブの更新間隔の秒数 | `30` |
 | `SILENCE_STOP_MINS` | この分数だけ無音が続いたら止める。0 で無効 | `10` |
@@ -135,9 +149,11 @@ models/                     whisper と VAD のモデル
 state/                      ログと実行中の状態ファイル
 build.sh                    .app バンドルを作る
 config.sh                   個人設定。config.example.sh から作る
+pyproject.toml              話者分離の Python 依存。uv sync で .venv を作る
 ```
 
 ## ライセンス
 
 MIT License。外部ツールは別プロセスとして呼び出している。
-whisper.cpp、whisper モデル、Silero VAD は MIT、ffmpeg は GPL-3.0。
+whisper.cpp、whisper モデル、Silero VAD、pyannote.audio は MIT、ffmpeg は GPL-3.0。
+話者分離のモデル pyannote/speaker-diarization-community-1 は CC-BY-4.0。
