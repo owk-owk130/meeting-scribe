@@ -90,7 +90,7 @@ args = parser.parse_args()
 
 recorded = recorded_at(args.recording)
 stamp = recorded.strftime("%Y-%m-%d-%H%M%S")
-title = f"会議メモ {stamp}"
+meta_title = ""
 tags = ["meeting"]
 sections = ""
 body = Path(args.body).read_text(encoding="utf-8")
@@ -98,23 +98,21 @@ body = Path(args.body).read_text(encoding="utf-8")
 meta = load_meta(args.meta)
 if meta:
     meta_title = filename_safe(meta["title"])
-    if meta_title:
-        title = meta_title
     # タグは frontmatter の [a, b] 形式に入れるので区切りと衝突する文字を落とす
     tags += [t for t in (one_line(re.sub(r"[,\[\]]", "", tag)) for tag in meta["tags"]) if t]
     sections = sections_markdown(meta, Path(args.out_dir))
     body = apply_corrections(body, meta["corrections"])
 
 event = load_event(args.event) if args.event else None
+event_title = ""
 event_lines = []
 if event:
     event_title = filename_safe(event["title"])
-    if event_title:
-        title = event_title
     event_lines.append(f"event: {one_line(event['title'])}")
     attendees = [one_line(re.sub(r"[,\[\]]", "", a)) for a in event["attendees"]]
     event_lines.append(f"attendees: [{','.join(a for a in attendees if a)}]")
 
+title = " - ".join(t for t in (event_title, meta_title) if t) or f"会議メモ {stamp}"
 note = unused_path(Path(args.out_dir), stamp, title)
 note.write_text(
     "\n".join(
