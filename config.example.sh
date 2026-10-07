@@ -15,6 +15,9 @@ CODEX_BIN="$HOME/.local/share/mise/shims/codex"
 DIARIZE=1
 # DIARIZE_PYTHON="$ROOT_DIR/.venv/bin/python"
 
+# カレンダーの予定が始まるとき、録音を促す通知を出す。0 で止める
+REMIND_MEETINGS=1
+
 LIVE_TRANSCRIBE=1
 
 LIVE_INTERVAL_SECS=30

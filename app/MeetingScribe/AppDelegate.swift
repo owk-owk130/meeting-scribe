@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var isTranscribing = false
     private var elapsedTimer: Timer?
     private var pollTimer: Timer?
+    private var reminderTimer: Timer?
+    private var remindedEventIDs = Set<String>()
     private let controller = config.map { RecordingController(rootDir: rootDir, config: $0) }
     private var scriptAvailable: Bool { controller != nil }
 
@@ -34,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let toggleItem = NSMenuItem(title: "録音開始", action: #selector(toggleRecording), keyEquivalent: "r")
     private let pauseItem = NSMenuItem(title: "一時停止", action: #selector(togglePause), keyEquivalent: "p")
     private let liveItem = NSMenuItem(title: "ライブ文字起こしを表示", action: #selector(toggleLivePanel), keyEquivalent: "l")
+    private let askItem = NSMenuItem(title: "過去の会議に質問する…", action: #selector(askMeetings), keyEquivalent: "")
 
     private let livePanel = LiveTranscriptPanel()
 
@@ -60,10 +63,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         eventStore.requestFullAccessToEvents { _, _ in }
         syncState()
         pollTimer = makeRepeatingTimer(5) { [weak self] in self?.syncState() }
+        if config?.remindMeetings == true {
+            reminderTimer = makeRepeatingTimer(60) { [weak self] in self?.remindMeetingStart() }
+        }
+    }
+
+    private func remindMeetingStart() {
+        guard !isRecording else { return }
+        // 繰り返し予定は各回が同じ eventIdentifier なので、開始時刻も含めて 1 回ずつ数える
+        for event in startingCalendarEvents()
+        where remindedEventIDs.insert("\(event.eventIdentifier ?? "")@\(event.startDate.timeIntervalSince1970)").inserted {
+            notify("「\(event.title ?? "予定")」が始まります。メニューから録音を開始できます")
+        }
     }
 
     private func buildMenu() {
         menu.delegate = self
+        // 自動有効化のままだと、質問の実行中に無効にした項目がメニューを開き直すたびに戻る
+        menu.autoenablesItems = false
 
         transcribingItem.isEnabled = false
         transcribingItem.isHidden = true
@@ -91,6 +108,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         resummarizeMenu.autoenablesItems = false
         menu.addItem(resummarizeItem)
         setRecentNotesPlaceholder("ノートがありません")
+
+        askItem.target = self
+        askItem.isEnabled = scriptAvailable
+        menu.addItem(askItem)
 
         pendingItem.submenu = pendingMenu
         pendingItem.isHidden = true
@@ -291,12 +312,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // .md の既定アプリ（エディタ等）に渡ってしまう。URL スキームで Obsidian に開かせる
     @objc private func openNote(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
+        openNote(path: path)
+    }
+
+    private func openNote(path: String) {
         var components = URLComponents()
         components.scheme = "obsidian"
         components.host = "open"
         components.queryItems = [URLQueryItem(name: "path", value: path)]
         guard let url = components.url else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    // メニューバー常駐（accessory）なので、前面化しないとアラートの入力欄にキーが届かない
+    @objc private func askMeetings() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "過去の会議に質問する"
+        alert.informativeText = "ノートを検索して答えます。1 分ほどかかり、回答は Vault の「質問」フォルダに保存されます。"
+        alert.addButton(withTitle: "質問する")
+        alert.addButton(withTitle: "キャンセル")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
+        field.placeholderString = "例: 和気町への視察はいつになった？"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let question = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+
+        askItem.isEnabled = false
+        notify("ノートを調べています…")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = runShell("/bin/bash", ["\(rootDir)/scripts/ask.sh", question])
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.askItem.isEnabled = true
+                guard result.exitCode == 0 else {
+                    self.showAlert("回答を作れませんでした", detail: result.stderr)
+                    return
+                }
+                if let line = result.stdout.split(separator: "\n").last(where: { $0.hasPrefix("note: ") }) {
+                    self.openNote(path: String(line.dropFirst("note: ".count)))
+                }
+            }
+        }
     }
 
     @objc private func openRecordingsFolder() {

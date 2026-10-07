@@ -15,6 +15,7 @@ struct Config {
     let maxRecordMins: String
     let recordingsKeepDays: Int
     let inboxDir: String
+    let remindMeetings: Bool
     let live: LiveConfig
 }
 
@@ -33,7 +34,7 @@ func loadConfig() -> Config? {
     let variables = [
         "$RECORDINGS_DIR", "$VAULT_MEETINGS_DIR", "${LIVE_TRANSCRIBE:-1}", "${SILENCE_STOP_MINS:-0}",
         "${SILENCE_THRESHOLD_DB:-}", "${MAX_RECORD_MINS:-0}", "${RECORDINGS_KEEP_DAYS:-0}", "${INBOX_DIR:-}",
-        "${LIVE_INTERVAL_SECS:-30}", "$WHISPER_BIN", "$FFMPEG_BIN", "$MODEL", "$VAD_MODEL", "$WHISPER_LANG",
+        "${REMIND_MEETINGS:-1}", "${LIVE_INTERVAL_SECS:-30}", "$WHISPER_BIN", "$FFMPEG_BIN", "$MODEL", "$VAD_MODEL", "$WHISPER_LANG",
     ]
     let result = runShell("/bin/bash", [
         "-c",
@@ -43,12 +44,13 @@ func loadConfig() -> Config? {
     ])
     let lines = result.stdout.components(separatedBy: "\n")
     guard result.exitCode == 0, lines.count == variables.count, !lines[0].isEmpty, !lines[1].isEmpty else { return nil }
-    let live = LiveConfig(intervalSecs: Int(lines[8]) ?? 30, whisperBin: lines[9], ffmpegBin: lines[10],
-                          model: lines[11], vadModel: lines[12], language: lines[13],
+    let live = LiveConfig(intervalSecs: Int(lines[9]) ?? 30, whisperBin: lines[10], ffmpegBin: lines[11],
+                          model: lines[12], vadModel: lines[13], language: lines[14],
                           mergeScript: "\(rootDir)/scripts/merge_transcript.py")
     return Config(recordingsDir: lines[0], vaultMeetingsDir: lines[1], liveTranscribe: lines[2] != "0",
                   silenceStopMins: lines[3], silenceThresholdDB: lines[4], maxRecordMins: lines[5],
-                  recordingsKeepDays: Int(lines[6]) ?? 0, inboxDir: lines[7], live: live)
+                  recordingsKeepDays: Int(lines[6]) ?? 0, inboxDir: lines[7],
+                  remindMeetings: lines[8] != "0", live: live)
 }
 
 let config = loadConfig()
